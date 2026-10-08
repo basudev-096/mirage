@@ -71,7 +71,7 @@ interface Transaction extends AdapterInfo {
 ```typescript
 class ExampleQueryable {
   readonly provider = 'postgres' as const
-  readonly adapterName = '@acme/adapter-example'
+  readonly adapterName = '@MIRAGE/adapter-example'
 
   constructor(protected readonly connection: DriverConnection) {}
 
