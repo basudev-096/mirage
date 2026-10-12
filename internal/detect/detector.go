@@ -38,7 +38,7 @@ func DefaultConfig() Config {
 		ParanoiaLevel:            1,
 		AnomalyThreshold:         5,
 		MaxBodyInspectSize:       32768, // 32KB
-		Timeout:                  5 * time.Millisecond,
+		Timeout:                  50 * time.Millisecond,
 		MaxConcurrentInspections: 500,
 		FailClosed:               false,
 		EvalBlock:                false,

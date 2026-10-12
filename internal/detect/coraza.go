@@ -84,7 +84,29 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 		return verdict, ErrWAFBusy
 	}
 
-	// 2. Set per-request context deadline
+	// 2. Snapshot request metadata, clone headers, and read body slice synchronously
+	clientHost := req.RemoteAddr
+	uri := req.URL.RequestURI()
+	if uri == "" {
+		uri = req.URL.Path
+	}
+	method := req.Method
+	proto := req.Proto
+	host := req.Host
+	headerClone := req.Header.Clone()
+
+	var bodyBuf []byte
+	var oversized, truncated bool
+	var decompressErr error
+
+	if req.Body != nil && req.Body != http.NoBody && req.Method != http.MethodGet && req.Method != http.MethodHead {
+		bodyBuf, oversized, decompressErr = d.readInspectBody(req)
+		if oversized {
+			truncated = true
+		}
+	}
+
+	// 3. Set per-request context deadline
 	inspectCtx, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
 	defer cancel()
 
@@ -95,7 +117,7 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 	resChan := make(chan result, 1)
 
 	go func() {
-		v, err := d.doInspect(req, start)
+		v, err := d.doInspectSnapshot(clientHost, uri, method, proto, host, headerClone, bodyBuf, oversized, truncated, decompressErr, start)
 		resChan <- result{verdict: v, err: err}
 	}()
 
@@ -115,59 +137,47 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 	}
 }
 
-// doInspect executes the two-phase Coraza WAF inspection.
-func (d *CorazaDetector) doInspect(req *http.Request, start time.Time) (Verdict, error) {
+// doInspectSnapshot executes the two-phase Coraza WAF inspection on isolated snapshots.
+func (d *CorazaDetector) doInspectSnapshot(
+	clientHost, uri, method, proto, host string,
+	headers http.Header,
+	bodyBuf []byte,
+	oversized, truncated bool,
+	decompressErr error,
+	start time.Time,
+) (Verdict, error) {
 	tx := d.waf.NewTransaction()
 	defer tx.Close()
 
 	// Phase 1: Process Connection, URI, Method, and Headers
-	clientHost := req.RemoteAddr
 	clientPort := 0
 	tx.ProcessConnection(clientHost, clientPort, "", 0)
+	tx.ProcessURI(uri, method, proto)
 
-	uri := req.URL.RequestURI()
-	if uri == "" {
-		uri = req.URL.Path
-	}
-	tx.ProcessURI(uri, req.Method, req.Proto)
-
-	for k, vv := range req.Header {
+	for k, vv := range headers {
 		for _, v := range vv {
 			tx.AddRequestHeader(k, v)
 		}
 	}
-	if req.Host != "" {
-		tx.AddRequestHeader("Host", req.Host)
+	if host != "" {
+		tx.AddRequestHeader("Host", host)
 	}
 
 	interruption := tx.ProcessRequestHeaders()
 
 	// Phase 2: Process Request Body if present
-	var oversized, truncated bool
 	var category string
+	if decompressErr != nil {
+		category = "DecompressionError"
+	}
 
-	if req.Body != nil && req.Body != http.NoBody && req.Method != http.MethodGet && req.Method != http.MethodHead {
-		bodyBuf, isOversized, decompressErr := d.readInspectBody(req)
-		if isOversized {
-			oversized = true
-			truncated = true
-		}
-		if decompressErr != nil {
-			category = "DecompressionError"
-		}
-
-		if len(bodyBuf) > 0 {
-			it, _, _ := tx.WriteRequestBody(bodyBuf)
-			if it != nil {
-				interruption = it
-			} else {
-				if it2, err := tx.ProcessRequestBody(); err == nil && it2 != nil {
-					interruption = it2
-				}
-			}
+	if len(bodyBuf) > 0 {
+		it, _, _ := tx.WriteRequestBody(bodyBuf)
+		if it != nil {
+			interruption = it
 		} else {
-			if it, err := tx.ProcessRequestBody(); err == nil && it != nil {
-				interruption = it
+			if it2, err := tx.ProcessRequestBody(); err == nil && it2 != nil {
+				interruption = it2
 			}
 		}
 	} else {
