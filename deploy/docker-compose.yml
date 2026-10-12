@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    networks:
+      - mirage-net
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - mirage-net
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mirage
+      POSTGRES_PASSWORD: mirage_password
+      POSTGRES_DB: mirage_telemetry
+    ports:
+      - "5433:5432"
+    networks:
+      - mirage-net
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.proxy
+    ports:
+      - "8443:8443"
+    depends_on:
+      - backend
+      - redis
+      - postgres
+    networks:
+      - mirage-net
+
+networks:
+  mirage-net:
+    driver: bridge
