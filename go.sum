@@ -1,3 +1,5 @@
+github.com/brianvoe/gofakeit/v6 v6.28.0 h1:Xib46XXuQfmlLS2EXRuJpqcw8St6qSZz75OUo0tgAW4=
+github.com/brianvoe/gofakeit/v6 v6.28.0/go.mod h1:Xj58BMSnFqcn/fAQeSK+/PLtC5kSb7FJIq4JyGa8vEs=
 github.com/corazawaf/coraza-coreruleset/v4 v4.9.0 h1:6pD02ANsc698409dKzpR/+1a9var8erfzvFkVgP/Y5s=
 github.com/corazawaf/coraza-coreruleset/v4 v4.9.0/go.mod h1:yeZPZUM23HVL0jMAzLfKF3M7XjCQBXDrvcQT/gkjwhg=
 github.com/corazawaf/coraza/v3 v3.2.1 h1:zBIji4ut9FtFe8lXdqFwXMAkUoDJZ7HsOlEUYWERLI8=

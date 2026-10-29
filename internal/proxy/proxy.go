@@ -13,21 +13,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mirage-proxy/mirage/internal/deceive"
 	"github.com/mirage-proxy/mirage/internal/detect"
 )
 
-// Config defines the operational parameters for the Mirage edge reverse proxy.
+// Config defines the operational parameters for the edge reverse proxy.
 type Config struct {
-	TargetURL      string
-	ListenAddr     string
-	TLSCertFile    string
-	TLSKeyFile     string
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	IdleTimeout    time.Duration
-	FlushInterval  time.Duration
-	Detector       detect.Detector
-	EvalBlock      bool
+	TargetURL     string
+	ListenAddr    string
+	TLSCertFile   string
+	TLSKeyFile    string
+	ReadTimeout   time.Duration
+	WriteTimeout  time.Duration
+	IdleTimeout   time.Duration
+	FlushInterval time.Duration
+	Detector      detect.Detector
+	// Deceiver, when non-nil, handles all flagged requests by synthesising a
+	// fake response instead of forwarding to the real backend. This is the
+	// normal production mode. EvalBlock takes precedence when both are set.
+	Deceiver      deceive.Deceiver
+	EvalBlock     bool
 }
 
 // DefaultConfig returns sane default parameters for high-throughput production proxying.
@@ -50,6 +55,7 @@ type Proxy struct {
 	reverseProxy *httputil.ReverseProxy
 	transport    *http.Transport
 	detector     detect.Detector
+	deceiver     deceive.Deceiver
 }
 
 var bufPool = sync.Pool{
@@ -153,6 +159,7 @@ func NewProxy(cfg Config) (*Proxy, error) {
 		targetURL: parsedURL,
 		transport: transport,
 		detector:  cfg.Detector,
+		deceiver:  cfg.Deceiver,
 	}
 
 	rp := &httputil.ReverseProxy{
@@ -224,6 +231,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("[Detector Warning] Inspection error: %v", err)
 	}
+	log.Printf("[Detector] %s %s category=%s score=%d rules=%v duration=%s", r.Method, r.URL.RequestURI(), verdict.Category, verdict.Score, verdict.RuleIDs, verdict.InspectionTime)
 
 	if tb != nil {
 		tb.Reset()
@@ -235,15 +243,29 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Header.Set("X-Mirage-Verdict", verdictHeader)
 
-	if verdict.Malicious && p.cfg.EvalBlock {
+	if verdict.Malicious {
 		if tb != nil {
 			tb.Close()
 		}
-		w.Header().Set("X-Mirage-Verdict", verdictHeader)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":"forbidden","message":"Request blocked by security policy"}`))
-		return
+
+		// EvalBlock mode: return 403 for gotestwaf scoring runs.
+		if p.cfg.EvalBlock {
+			w.Header().Set("X-Mirage-Verdict", verdictHeader)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","message":"Request blocked by security policy"}`))
+			return
+		}
+
+		// Deception mode: synthesise a fake response — the TLS session is
+		// never reset and the backend is never contacted.
+		if p.deceiver != nil {
+			category := deceive.Category(verdict.Category)
+			if err := p.deceiver.Handle(w, r, category); err != nil {
+				log.Printf("[Deceiver Error] %v", err)
+			}
+			return
+		}
 	}
 
 	p.reverseProxy.ServeHTTP(w, r)

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mirage-proxy/mirage/internal/deceive"
 	"github.com/mirage-proxy/mirage/internal/detect"
 	"github.com/mirage-proxy/mirage/internal/proxy"
 )
@@ -21,16 +22,22 @@ func main() {
 	certFile := flag.String("cert", getEnv("TLS_CERT", "deploy/certs/server.crt"), "TLS certificate file path")
 	keyFile := flag.String("key", getEnv("TLS_KEY", "deploy/certs/server.key"), "TLS key file path")
 	evalBlock := flag.Bool("eval-block", getEnvBool("MIRAGE_EVAL_BLOCK", false), "Enable 403 evaluation blocking for flagged requests")
+	wafTimeout := flag.Duration("waf-timeout", getEnvDuration("MIRAGE_WAF_TIMEOUT", 50*time.Millisecond), "Maximum time allowed for each WAF inspection")
 	flag.Parse()
 
 	log.Println("==========================================================")
-	log.Println(" Starting Project Mirage Edge Proxy (Phase 2 Detection)")
+	log.Println(" Starting Project Mirage Edge Proxy (Phase 2+3)")
 	log.Printf(" Target Upstream: %s", *targetURL)
 	log.Printf(" HTTPS Listening: %s", *listenAddr)
 	log.Printf(" Eval Block Mode: %t", *evalBlock)
+	log.Printf(" WAF Inspection Timeout: %s", *wafTimeout)
+	if !*evalBlock {
+		log.Println(" Deception Mode: ACTIVE (fake responses for flagged requests)")
+	}
 	log.Println("==========================================================")
 
 	detCfg := detect.DefaultConfig()
+	detCfg.Timeout = *wafTimeout
 	detCfg.EvalBlock = *evalBlock
 	detector, err := detect.NewCorazaDetector(detCfg)
 	if err != nil {
@@ -42,6 +49,11 @@ func main() {
 	cfg.ListenAddr = *listenAddr
 	cfg.Detector = detector
 	cfg.EvalBlock = *evalBlock
+	// Wire the deception sandbox for production divert mode.
+	// EvalBlock (gotestwaf scoring) takes precedence over deception when set.
+	if !*evalBlock {
+		cfg.Deceiver = deceive.NewSandboxDeceiver()
+	}
 
 	p, err := proxy.NewProxy(cfg)
 	if err != nil {
@@ -103,6 +115,17 @@ func getEnvBool(key string, defaultValue bool) bool {
 		if err == nil {
 			return b
 		}
+	}
+	return defaultValue
+}
+
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if val, ok := os.LookupEnv(key); ok && val != "" {
+		duration, err := time.ParseDuration(val)
+		if err == nil && duration > 0 {
+			return duration
+		}
+		log.Printf("[WARNING] Invalid duration for %s=%q; using %s", key, val, defaultValue)
 	}
 	return defaultValue
 }
