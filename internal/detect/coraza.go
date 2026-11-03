@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/corazawaf/coraza/v3"
 	coreruleset "github.com/corazawaf/coraza-coreruleset/v4"
+	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 )
 
@@ -24,9 +27,16 @@ var (
 
 // CorazaDetector adapts Coraza WAF v3 and OWASP CRS v4 for request inspection.
 type CorazaDetector struct {
-	waf coraza.WAF
-	cfg Config
-	sem chan struct{}
+	waf     coraza.WAF
+	cfg     Config
+	sem     chan struct{}
+	cacheMu sync.Mutex
+	cache   map[string]cachedVerdict
+}
+
+type cachedVerdict struct {
+	verdict Verdict
+	expires time.Time
 }
 
 // NewCorazaDetector initializes an in-memory Coraza WAF instance with OWASP CRS v4.9.0 rules.
@@ -58,15 +68,22 @@ func NewCorazaDetector(cfg Config) (*CorazaDetector, error) {
 	}
 
 	return &CorazaDetector{
-		waf: waf,
-		cfg: cfg,
-		sem: make(chan struct{}, maxSem),
+		waf:   waf,
+		cfg:   cfg,
+		sem:   make(chan struct{}, maxSem),
+		cache: make(map[string]cachedVerdict),
 	}, nil
 }
 
 // Inspect evaluates an HTTP request against OWASP CRS and returns a Verdict.
 func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdict, error) {
 	start := time.Now()
+	if key, ok := decisionCacheKey(req); ok {
+		if verdict, found := d.cached(key); found {
+			verdict.InspectionTime = time.Since(start)
+			return verdict, nil
+		}
+	}
 
 	// 1. Acquire Concurrency Semaphore
 	select {
@@ -123,6 +140,9 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 
 	select {
 	case res := <-resChan:
+		if key, ok := decisionCacheKey(req); ok && res.err == nil {
+			d.storeCached(key, res.verdict)
+		}
 		return res.verdict, res.err
 	case <-inspectCtx.Done():
 		verdict := Verdict{
@@ -135,6 +155,53 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 		}
 		return verdict, ErrWAFTimeout
 	}
+}
+
+func decisionCacheKey(req *http.Request) (string, bool) {
+	if req.Body != nil && req.Body != http.NoBody {
+		return "", false
+	}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return "", false
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(req.Method + "\x00" + req.Host + "\x00" + req.URL.RequestURI()))
+	for _, name := range []string{"User-Agent", "Content-Type", "Accept", "Cookie", "X-Forwarded-For"} {
+		_, _ = hash.Write([]byte("\x00" + name + "=" + strings.Join(req.Header.Values(name), "\x00")))
+	}
+	return hex.EncodeToString(hash.Sum(nil)), true
+}
+
+func (d *CorazaDetector) cached(key string) (Verdict, bool) {
+	if d.cfg.DecisionCacheTTL <= 0 {
+		return Verdict{}, false
+	}
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
+	entry, ok := d.cache[key]
+	if !ok || time.Now().After(entry.expires) {
+		if ok {
+			delete(d.cache, key)
+		}
+		return Verdict{}, false
+	}
+	return entry.verdict, true
+}
+
+func (d *CorazaDetector) storeCached(key string, verdict Verdict) {
+	if d.cfg.DecisionCacheTTL <= 0 {
+		return
+	}
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
+	if d.cfg.DecisionCacheSize > 0 && len(d.cache) >= d.cfg.DecisionCacheSize {
+		for oldKey := range d.cache {
+			delete(d.cache, oldKey)
+			break
+		}
+	}
+	verdict.InspectionTime = 0
+	d.cache[key] = cachedVerdict{verdict: verdict, expires: time.Now().Add(d.cfg.DecisionCacheTTL)}
 }
 
 // doInspectSnapshot executes the two-phase Coraza WAF inspection on isolated snapshots.
@@ -202,8 +269,9 @@ func (d *CorazaDetector) doInspectSnapshot(
 		score += 5
 		hasAttackRule = true
 
-		if category == "" {
-			category = categorizeRule(mr)
+		candidate := categorizeRule(mr)
+		if category == "" || categoryPriority(candidate) > categoryPriority(category) {
+			category = candidate
 		}
 	}
 
@@ -320,4 +388,15 @@ func categorizeRule(mr types.MatchedRule) string {
 	}
 
 	return "Attack"
+}
+
+func categoryPriority(category string) int {
+	switch category {
+	case "SQLi", "XSS", "PathTraversal", "RCE":
+		return 2
+	case "Attack":
+		return 1
+	default:
+		return 0
+	}
 }

@@ -21,6 +21,26 @@ interface ThreatLog {
   mockResponse: string;
 }
 
+interface TelemetryEvent {
+  timestamp: string;
+  source_ip: string;
+  method: string;
+  path: string;
+  request_summary?: string;
+  verdict: string;
+  category?: string;
+  action: string;
+  phase?: string;
+  response_type?: string;
+  response_preview?: string;
+  score?: number;
+  payload_class?: string;
+  tarpit_duration_ms?: number;
+  bytes_served?: number;
+}
+
+const LIVE_SOCKET_URL = process.env.NEXT_PUBLIC_MIRAGE_WS_URL;
+
 // --- Static Data & Mocks ---
 const MOCK_IPS = [
   "185.220.101.4",
@@ -151,15 +171,18 @@ const INITIAL_LOGS: ThreatLog[] = [
 
 export default function Home() {
   // --- States ---
-  const [logs, setLogs] = useState<ThreatLog[]>(INITIAL_LOGS);
+  const [logs, setLogs] = useState<ThreatLog[]>(() => LIVE_SOCKET_URL ? [] : INITIAL_LOGS);
   const [isStreaming, setIsStreaming] = useState(true);
+  const [liveState, setLiveState] = useState<"live" | "connecting" | "offline" | "demo">(
+    LIVE_SOCKET_URL ? "connecting" : "demo"
+  );
   const [feedFilter, setFeedFilter] = useState<"All" | "Honeypot" | "Tarpit">("All");
   const [selectedLog, setSelectedLog] = useState<ThreatLog | null>(null);
   const [copiedState, setCopiedState] = useState(false);
 
   // --- Live Threat Log Stream Simulation ---
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!isStreaming || LIVE_SOCKET_URL) return;
 
     const interval = setInterval(() => {
       const randomIp = MOCK_IPS[Math.floor(Math.random() * MOCK_IPS.length)];
@@ -184,6 +207,62 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [isStreaming]);
+
+  useEffect(() => {
+    if (!LIVE_SOCKET_URL) return;
+
+    let socket: WebSocket | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      setLiveState("connecting");
+      socket = new WebSocket(LIVE_SOCKET_URL);
+      socket.onopen = () => setLiveState("live");
+      socket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(message.data) as TelemetryEvent;
+          if (event.verdict !== "Malicious") return;
+          const timestamp = new Date(event.timestamp);
+          const action = event.action === "tarpit" ? "Tarpit" : "Honeypot";
+          const log: ThreatLog = {
+            id: `${event.source_ip}-${event.method}-${event.path}-${event.category || event.payload_class || "unknown"}-${event.action}`,
+            time: Number.isNaN(timestamp.getTime()) ? "--:--:--" : timestamp.toTimeString().split(" ")[0],
+            ip: event.source_ip,
+            vector: event.category || event.payload_class || "Unknown",
+            action,
+            payload: `${event.method} ${event.path}`,
+            mockResponse: JSON.stringify({
+              request: event.request_summary ?? `${event.method} ${event.path}`,
+              action: event.action,
+              phase: event.phase ?? "completed",
+              response_type: event.response_type ?? "",
+              score: event.score ?? 0,
+              tarpit_duration_ms: event.tarpit_duration_ms ?? 0,
+              bytes_served: event.bytes_served ?? 0,
+            }, null, 2) + (event.response_preview ? `\n\nFAKE RESPONSE PREVIEW\n${event.response_preview}` : ""),
+          };
+          setLogs((previous) => [log, ...previous.filter((item) => item.id !== log.id).slice(0, 14)]);
+        } catch {
+          // Ignore malformed events so one bad message cannot stop the feed.
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        setLiveState("offline");
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+      socket.onerror = () => socket?.close();
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, []);
 
   // --- Helpers ---
   const handleCopyPayload = (text: string) => {
@@ -222,10 +301,12 @@ export default function Home() {
                   {isStreaming && (
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neutral-600 opacity-75"></span>
                   )}
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isStreaming ? "bg-neutral-800" : "bg-neutral-300"}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${liveState === "live" || (liveState === "demo" && isStreaming) ? "bg-emerald-500" : "bg-neutral-300"}`}></span>
                 </span>
               </div>
-              <p className="text-xs text-[#5D5D5D]">Real-time detection events captured by Edge Gateway</p>
+              <p className="text-xs text-[#5D5D5D]">
+                {liveState === "live" ? "Live events from Mirage ingest" : liveState === "demo" ? "Local demo data; configure the ingest WebSocket for live events" : "Connecting to Mirage ingest..."}
+              </p>
             </div>
 
             {/* Pause/Resume & Stream Filter */}

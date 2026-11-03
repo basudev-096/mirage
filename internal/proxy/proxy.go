@@ -1,7 +1,10 @@
 package proxy
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +18,9 @@ import (
 
 	"github.com/mirage-proxy/mirage/internal/deceive"
 	"github.com/mirage-proxy/mirage/internal/detect"
+	"github.com/mirage-proxy/mirage/internal/fingerprint"
+	"github.com/mirage-proxy/mirage/internal/tarpit"
+	"github.com/mirage-proxy/mirage/internal/telemetry"
 )
 
 // Config defines the operational parameters for the edge reverse proxy.
@@ -28,11 +34,13 @@ type Config struct {
 	IdleTimeout   time.Duration
 	FlushInterval time.Duration
 	Detector      detect.Detector
+	Tarpit        tarpit.Tarpit
 	// Deceiver, when non-nil, handles all flagged requests by synthesising a
 	// fake response instead of forwarding to the real backend. This is the
 	// normal production mode. EvalBlock takes precedence when both are set.
-	Deceiver      deceive.Deceiver
-	EvalBlock     bool
+	Deceiver  deceive.Deceiver
+	EvalBlock bool
+	Telemetry *telemetry.Publisher
 }
 
 // DefaultConfig returns sane default parameters for high-throughput production proxying.
@@ -56,6 +64,7 @@ type Proxy struct {
 	transport    *http.Transport
 	detector     detect.Detector
 	deceiver     deceive.Deceiver
+	tarpit       tarpit.Tarpit
 }
 
 var bufPool = sync.Pool{
@@ -74,6 +83,58 @@ type trackedBody struct {
 	off      int
 	closed   bool
 }
+
+type responseMetricsWriter struct {
+	http.ResponseWriter
+	bytes       int64
+	status      int
+	wroteHeader bool
+}
+
+func (w *responseMetricsWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseMetricsWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(body)
+	w.bytes += int64(n)
+	return n, err
+}
+
+func (w *responseMetricsWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *responseMetricsWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *responseMetricsWriter) Push(target string, options *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, options)
+}
+
+func (w *responseMetricsWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func newTrackedBody(orig io.ReadCloser) (*trackedBody, error) {
 	if orig == nil || orig == http.NoBody {
@@ -160,6 +221,7 @@ func NewProxy(cfg Config) (*Proxy, error) {
 		transport: transport,
 		detector:  cfg.Detector,
 		deceiver:  cfg.Deceiver,
+		tarpit:    cfg.Tarpit,
 	}
 
 	rp := &httputil.ReverseProxy{
@@ -210,6 +272,8 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 
 // ServeHTTP delegates request processing to the internal ReverseProxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	metrics := &responseMetricsWriter{ResponseWriter: w}
+	w = fingerprint.NewWriter(metrics)
 	if p.detector == nil {
 		p.reverseProxy.ServeHTTP(w, r)
 		return
@@ -242,6 +306,45 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		verdictHeader = "Malicious"
 	}
 	r.Header.Set("X-Mirage-Verdict", verdictHeader)
+	useTarpit := verdict.Malicious && p.tarpit != nil && shouldTarpit(r)
+	event := telemetry.Event{
+		Timestamp:      time.Now().UTC(),
+		SourceIP:       sourceIP(r.RemoteAddr),
+		Method:         r.Method,
+		Path:           r.URL.Path,
+		RequestSummary: requestSummary(r),
+		UserAgent:      r.UserAgent(),
+		Verdict:        verdictHeader,
+		Category:       verdict.Category,
+		PayloadClass:   verdict.Category,
+		Score:          verdict.Score,
+		InspectionTime: verdict.InspectionTime.Microseconds(),
+		Action:         "passthrough",
+	}
+	ruleIDs := make([]string, len(verdict.RuleIDs))
+	for i, ruleID := range verdict.RuleIDs {
+		ruleIDs[i] = string(ruleID)
+	}
+	event.RuleIDs = ruleIDs
+	started := time.Now()
+	if p.cfg.Telemetry != nil {
+		if verdict.Malicious {
+			event.Action = "honeypot"
+			if useTarpit {
+				event.Action = "tarpit"
+			}
+		}
+		if verdict.Malicious {
+			event.Phase = "started"
+			p.cfg.Telemetry.Publish(event)
+		}
+		defer func() {
+			event.Phase = "completed"
+			event.TarpitDuration = time.Since(started).Milliseconds()
+			event.BytesServed = metrics.bytes
+			p.cfg.Telemetry.Publish(event)
+		}()
+	}
 
 	if verdict.Malicious {
 		if tb != nil {
@@ -259,11 +362,43 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Deception mode: synthesise a fake response — the TLS session is
 		// never reset and the backend is never contacted.
+		if useTarpit {
+			if p.deceiver != nil {
+				if throttler, ok := p.tarpit.(interface {
+					Throttle(http.ResponseWriter, *http.Request, *tarpit.ResponseCapture) error
+				}); ok {
+					captured := tarpit.NewResponseCapture()
+					if err := p.deceiver.Handle(captured, r, deceive.Category(verdict.Category)); err != nil {
+						log.Printf("[Deceiver Error] %v", err)
+						return
+					}
+					event.ResponseType = "adaptive_fake_response"
+					event.ResponsePreview = previewResponse(captured.Body())
+					if err := throttler.Throttle(w, r, captured); err != nil {
+						if errors.Is(err, tarpit.ErrCapacity) && p.deceiver != nil {
+							_ = p.deceiver.Handle(w, r, deceive.Category(verdict.Category))
+							return
+						}
+						log.Printf("[Tarpit Error] %v", err)
+					}
+					return
+				}
+			}
+			if err := p.tarpit.Handle(w, r); err != nil {
+				log.Printf("[Tarpit Error] %v", err)
+			}
+			return
+		}
 		if p.deceiver != nil {
 			category := deceive.Category(verdict.Category)
-			if err := p.deceiver.Handle(w, r, category); err != nil {
+			captured := tarpit.NewResponseCapture()
+			if err := p.deceiver.Handle(captured, r, category); err != nil {
 				log.Printf("[Deceiver Error] %v", err)
+				return
 			}
+			event.ResponseType = "fake_honeypot_response"
+			event.ResponsePreview = previewResponse(captured.Body())
+			copyCapturedResponse(w, captured)
 			return
 		}
 	}
@@ -271,16 +406,94 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.reverseProxy.ServeHTTP(w, r)
 }
 
+// shouldTarpit selects slow deception for scanner-like traffic. Exploit
+// requests from ordinary clients still receive an immediate honeypot response,
+// which lets the same running proxy demonstrate both actions automatically.
+func shouldTarpit(r *http.Request) bool {
+	ua := strings.ToLower(r.UserAgent())
+	for _, marker := range []string{"sqlmap", "nikto", "masscan", "nmap", "python-requests", "zgrab", "gobuster", "dirbuster"} {
+		if strings.Contains(ua, marker) {
+			return true
+		}
+	}
+	path := strings.ToLower(r.URL.Path)
+	for _, probe := range []string{"/.env", "/.git", "/wp-admin", "/actuator", "/server-status", "/phpmyadmin"} {
+		if strings.HasPrefix(path, probe) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestSummary(r *http.Request) string {
+	query := r.URL.Query()
+	for key, values := range query {
+		if len(values) > 0 {
+			return r.Method + " " + r.URL.Path + "?" + key + "=" + truncateActivity(values[0])
+		}
+	}
+	return r.Method + " " + r.URL.Path
+}
+
+func previewResponse(body []byte) string {
+	const maxPreview = 512
+	return string(body[:minInt(len(body), maxPreview)])
+}
+
+func truncateActivity(value string) string {
+	const maxValue = 160
+	if len(value) <= maxValue {
+		return value
+	}
+	return value[:maxValue] + "..."
+}
+
+func copyCapturedResponse(w http.ResponseWriter, captured *tarpit.ResponseCapture) {
+	for key, values := range captured.Header() {
+		w.Header()[key] = append([]string(nil), values...)
+	}
+	w.WriteHeader(captured.Status())
+	_, _ = w.Write(captured.Body())
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
 // Server returns an *http.Server configured with sane timeouts and optional TLS settings.
 func (p *Proxy) Server(tlsConfig *tls.Config) *http.Server {
-	return &http.Server{
+	writeTimeout := p.cfg.WriteTimeout
+	if durationProvider, ok := p.tarpit.(interface{ Duration() time.Duration }); ok {
+		if tarpitTimeout := durationProvider.Duration() + 10*time.Second; tarpitTimeout > writeTimeout {
+			writeTimeout = tarpitTimeout
+		}
+	}
+	server := &http.Server{
 		Addr:         p.cfg.ListenAddr,
 		Handler:      p,
 		ReadTimeout:  p.cfg.ReadTimeout,
-		WriteTimeout: p.cfg.WriteTimeout,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  p.cfg.IdleTimeout,
 		TLSConfig:    tlsConfig,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return tarpit.WithConnection(ctx, conn)
+		},
 	}
+	if p.tarpit != nil {
+		server.ConnState = p.tarpit.ConnStore().StateHook()
+	}
+	return server
+}
+
+func sourceIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 // DefaultTLSConfig returns a recommended TLS 1.2/1.3 configuration with strong cipher suites.

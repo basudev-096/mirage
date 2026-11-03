@@ -14,6 +14,9 @@ import (
 	"github.com/mirage-proxy/mirage/internal/deceive"
 	"github.com/mirage-proxy/mirage/internal/detect"
 	"github.com/mirage-proxy/mirage/internal/proxy"
+	"github.com/mirage-proxy/mirage/internal/tarpit"
+	"github.com/mirage-proxy/mirage/internal/telemetry"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -22,7 +25,11 @@ func main() {
 	certFile := flag.String("cert", getEnv("TLS_CERT", "deploy/certs/server.crt"), "TLS certificate file path")
 	keyFile := flag.String("key", getEnv("TLS_KEY", "deploy/certs/server.key"), "TLS key file path")
 	evalBlock := flag.Bool("eval-block", getEnvBool("MIRAGE_EVAL_BLOCK", false), "Enable 403 evaluation blocking for flagged requests")
+	tarpitEnabled := flag.Bool("tarpit", getEnvBool("MIRAGE_TARPIT", false), "Enable adaptive tarpit for flagged requests")
 	wafTimeout := flag.Duration("waf-timeout", getEnvDuration("MIRAGE_WAF_TIMEOUT", 50*time.Millisecond), "Maximum time allowed for each WAF inspection")
+	redisAddr := flag.String("redis-addr", getEnv("REDIS_ADDR", "127.0.0.1:6380"), "Redis address for telemetry")
+	redisStream := flag.String("redis-stream", getEnv("REDIS_STREAM", "mirage:events"), "Redis telemetry stream")
+	telemetryQueue := flag.Int("telemetry-queue", getEnvInt("MIRAGE_TELEMETRY_QUEUE", 4096), "Bounded telemetry queue size")
 	flag.Parse()
 
 	log.Println("==========================================================")
@@ -30,6 +37,7 @@ func main() {
 	log.Printf(" Target Upstream: %s", *targetURL)
 	log.Printf(" HTTPS Listening: %s", *listenAddr)
 	log.Printf(" Eval Block Mode: %t", *evalBlock)
+	log.Printf(" Adaptive Tarpit: %t", *tarpitEnabled)
 	log.Printf(" WAF Inspection Timeout: %s", *wafTimeout)
 	if !*evalBlock {
 		log.Println(" Deception Mode: ACTIVE (fake responses for flagged requests)")
@@ -43,16 +51,34 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize Coraza WAF detector: %v", err)
 	}
+	redisClient := redis.NewClient(&redis.Options{Addr: *redisAddr})
+	redisSink, err := telemetry.NewRedisSink(redisClient, *redisStream, 100000)
+	if err != nil {
+		log.Fatalf("Failed to initialize telemetry sink: %v", err)
+	}
+	telemetryPublisher := telemetry.NewPublisher(context.Background(), *telemetryQueue, redisSink)
+	defer func() {
+		telemetryPublisher.Close()
+		_ = redisClient.Close()
+	}()
 
 	cfg := proxy.DefaultConfig()
 	cfg.TargetURL = *targetURL
 	cfg.ListenAddr = *listenAddr
 	cfg.Detector = detector
 	cfg.EvalBlock = *evalBlock
+	cfg.Telemetry = telemetryPublisher
 	// Wire the deception sandbox for production divert mode.
 	// EvalBlock (gotestwaf scoring) takes precedence over deception when set.
 	if !*evalBlock {
 		cfg.Deceiver = deceive.NewSandboxDeceiver()
+	}
+	if *tarpitEnabled && !*evalBlock {
+		adaptiveTarpit, err := tarpit.New(tarpit.DefaultConfig())
+		if err != nil {
+			log.Fatalf("Failed to initialize adaptive tarpit: %v", err)
+		}
+		cfg.Tarpit = adaptiveTarpit
 	}
 
 	p, err := proxy.NewProxy(cfg)
@@ -126,6 +152,17 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 			return duration
 		}
 		log.Printf("[WARNING] Invalid duration for %s=%q; using %s", key, val, defaultValue)
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if val := os.Getenv(key); val != "" {
+		parsed, err := strconv.Atoi(val)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+		log.Printf("[WARNING] Invalid integer for %s=%q; using %d", key, val, defaultValue)
 	}
 	return defaultValue
 }

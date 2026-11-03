@@ -4,7 +4,7 @@ GO := ~/.local/go/bin/go
 GO_FLAGS := -race
 PATH := $(HOME)/.local/go/bin:$(PATH)
 
-.PHONY: all build test vet lint docker-up docker-down bench clean certs
+.PHONY: all build test vet lint dashboard-lint dashboard-build docker-up docker-down bench tarpit-bench clean certs
 
 all: build test
 
@@ -16,8 +16,9 @@ certs:
 	fi
 
 build:
-	@echo "Building mirage-proxy..."
+	@echo "Building Mirage services..."
 	@$(GO) build -o bin/mirage-proxy ./cmd/mirage-proxy
+	@$(GO) build -o bin/mirage-ingest ./cmd/mirage-ingest
 
 test: certs
 	@echo "Running unit tests..."
@@ -29,6 +30,12 @@ vet:
 
 lint: vet
 	@echo "Linting..."
+
+dashboard-lint:
+	@cd web/dashboard && npm run lint
+
+dashboard-build:
+	@cd web/dashboard && npm run build
 
 docker-up: certs
 	@echo "Starting Docker Compose lab environment..."
@@ -48,6 +55,10 @@ bench:
 	else \
 		echo "k6 not installed and docker unavailable."; \
 	fi
+
+tarpit-bench:
+	@echo "Running the bounded adaptive-vs-flat tarpit probe..."
+	@$(GO) run ./bench/tarpit_probe.go
 
 clean:
 	rm -rf bin/ deploy/certs/*.crt deploy/certs/*.key

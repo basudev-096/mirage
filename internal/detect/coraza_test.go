@@ -54,6 +54,44 @@ func TestCoraza_SQLi(t *testing.T) {
 	}
 }
 
+func TestCoraza_PrefersSpecificCategoryOverGenericRule(t *testing.T) {
+	detector, err := NewCorazaDetector(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/search?q="+url.QueryEscape("' OR '1'='1' --"), nil)
+	verdict, err := detector.Inspect(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verdict.Malicious {
+		t.Fatalf("expected malicious verdict, got %+v", verdict)
+	}
+	if verdict.Category != "SQLi" {
+		t.Fatalf("category = %q, want SQLi; rules=%v", verdict.Category, verdict.RuleIDs)
+	}
+}
+
+func TestCoraza_CachesRepeatSafeGETVerdicts(t *testing.T) {
+	detector := newTestDetector(t)
+	request := makeCleanRequest(http.MethodGet, "/api/health", "")
+	first, err := detector.Inspect(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := makeCleanRequest(http.MethodGet, "/api/health", "")
+	second, err := detector.Inspect(context.Background(), secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Malicious != second.Malicious || first.Category != second.Category {
+		t.Fatalf("cached verdict = %+v, first verdict = %+v", second, first)
+	}
+	if second.InspectionTime >= first.InspectionTime {
+		t.Fatalf("cached inspection time = %s, first inspection time = %s", second.InspectionTime, first.InspectionTime)
+	}
+}
+
 func TestCoraza_XSS(t *testing.T) {
 	d := newTestDetector(t)
 	ctx := context.Background()

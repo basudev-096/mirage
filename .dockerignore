@@ -1,0 +1,5 @@
+.git
+.github
+web/dashboard/node_modules
+web/dashboard/.next
+bin

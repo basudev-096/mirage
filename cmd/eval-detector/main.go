@@ -27,7 +27,7 @@ type BenchmarkResult struct {
 
 func main() {
 	fmt.Println("=================================================================")
-	fmt.Println(" Project Mirage Phase 2 Detection Engine Evaluation & Benchmarking")
+	fmt.Println(" Project Mirage Detection Engine Evaluation & Benchmarking")
 	fmt.Println("=================================================================")
 
 	cfg := detect.DefaultConfig()

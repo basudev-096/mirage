@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+web/dashboard/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,6 +16,7 @@
 
 # next.js
 /.next/
+web/dashboard/.next/
 /out/
 
 # production
