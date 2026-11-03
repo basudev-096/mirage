@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+web/dashboard/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,6 +16,7 @@
 
 # next.js
 /.next/
+web/dashboard/.next/
 /out/
 
 # production
@@ -23,6 +25,12 @@
 # misc
 .DS_Store
 *.pem
+bin/
+*.exe
+*.test
+*.out
+*.md
+docs/
 
 # debug
 npm-debug.log*
@@ -39,3 +47,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.vscode/

@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    networks:
+      - mirage-net
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - mirage-net
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mirage
+      POSTGRES_PASSWORD: mirage_password
+      POSTGRES_DB: mirage_telemetry
+    ports:
+      - "5433:5432"
+    networks:
+      - mirage-net
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.proxy
+    ports:
+      - "8443:8443"
+    depends_on:
+      - backend
+      - redis
+      - postgres
+    environment:
+      MIRAGE_WAF_TIMEOUT: ${MIRAGE_WAF_TIMEOUT:-250ms}
+      MIRAGE_TARPIT: ${MIRAGE_TARPIT:-true}
+      REDIS_ADDR: redis:6379
+      REDIS_STREAM: mirage:events
+    networks:
+      - mirage-net
+
+  ingest:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ingest
+    ports:
+      - "8090:8090"
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_ADDR: redis:6379
+      DATABASE_URL: postgres://mirage:mirage_password@postgres:5432/mirage_telemetry
+      INGEST_LISTEN_ADDR: :8090
+    networks:
+      - mirage-net
+
+  dashboard:
+    build:
+      context: ../web/dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_MIRAGE_WS_URL: ws://localhost:8090/ws
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    depends_on:
+      - ingest
+    networks:
+      - mirage-net
+
+networks:
+  mirage-net:
+    driver: bridge
