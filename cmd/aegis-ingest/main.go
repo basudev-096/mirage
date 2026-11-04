@@ -11,17 +11,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/telemetry"
+	"github.com/aegis-proxy/aegis/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	listenAddr := getEnv("INGEST_LISTEN_ADDR", ":8090")
 	redisAddr := getEnv("REDIS_ADDR", "127.0.0.1:6380")
-	redisStream := getEnv("REDIS_STREAM", "mirage:events")
-	redisGroup := getEnv("REDIS_GROUP", "mirage-ingest")
+	redisStream := getEnv("REDIS_STREAM", "aegis:events")
+	redisGroup := getEnv("REDIS_GROUP", "aegis-ingest")
 	redisConsumer := getEnv("REDIS_CONSUMER", hostname())
-	databaseURL := getEnv("DATABASE_URL", "postgres://mirage:mirage_password@127.0.0.1:5433/mirage_telemetry")
+	databaseURL := getEnv("DATABASE_URL", "postgres://aegis:aegis_password@127.0.0.1:5433/aegis_telemetry")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -37,7 +37,7 @@ func main() {
 		log.Fatalf("ensure telemetry schema: %v", err)
 	}
 
-	hub := telemetry.NewHub()
+	hub := telemetry.NewHub(store)
 	consumer, err := telemetry.NewConsumer(redisClient, store, hub, redisStream, redisGroup, redisConsumer, 100)
 	if err != nil {
 		log.Fatalf("initialize telemetry consumer: %v", err)
@@ -65,7 +65,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Mirage ingest listening on %s", listenAddr)
+		log.Printf("Aegis ingest listening on %s", listenAddr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("ingest HTTP server stopped: %v", err)
 			stop()

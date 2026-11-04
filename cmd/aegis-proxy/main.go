@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/deceive"
-	"github.com/mirage-proxy/mirage/internal/detect"
-	"github.com/mirage-proxy/mirage/internal/proxy"
-	"github.com/mirage-proxy/mirage/internal/tarpit"
-	"github.com/mirage-proxy/mirage/internal/telemetry"
+	"github.com/aegis-proxy/aegis/internal/deceive"
+	"github.com/aegis-proxy/aegis/internal/detect"
+	"github.com/aegis-proxy/aegis/internal/proxy"
+	"github.com/aegis-proxy/aegis/internal/tarpit"
+	"github.com/aegis-proxy/aegis/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,16 +24,16 @@ func main() {
 	listenAddr := flag.String("listen", getEnv("LISTEN_ADDR", ":8443"), "HTTPS proxy listen address")
 	certFile := flag.String("cert", getEnv("TLS_CERT", "deploy/certs/server.crt"), "TLS certificate file path")
 	keyFile := flag.String("key", getEnv("TLS_KEY", "deploy/certs/server.key"), "TLS key file path")
-	evalBlock := flag.Bool("eval-block", getEnvBool("MIRAGE_EVAL_BLOCK", false), "Enable 403 evaluation blocking for flagged requests")
-	tarpitEnabled := flag.Bool("tarpit", getEnvBool("MIRAGE_TARPIT", false), "Enable adaptive tarpit for flagged requests")
-	wafTimeout := flag.Duration("waf-timeout", getEnvDuration("MIRAGE_WAF_TIMEOUT", 50*time.Millisecond), "Maximum time allowed for each WAF inspection")
+	evalBlock := flag.Bool("eval-block", getEnvBool("AEGIS_EVAL_BLOCK", false), "Enable 403 evaluation blocking for flagged requests")
+	tarpitEnabled := flag.Bool("tarpit", getEnvBool("AEGIS_TARPIT", false), "Enable adaptive tarpit for flagged requests")
+	wafTimeout := flag.Duration("waf-timeout", getEnvDuration("AEGIS_WAF_TIMEOUT", 50*time.Millisecond), "Maximum time allowed for each WAF inspection")
 	redisAddr := flag.String("redis-addr", getEnv("REDIS_ADDR", "127.0.0.1:6380"), "Redis address for telemetry")
-	redisStream := flag.String("redis-stream", getEnv("REDIS_STREAM", "mirage:events"), "Redis telemetry stream")
-	telemetryQueue := flag.Int("telemetry-queue", getEnvInt("MIRAGE_TELEMETRY_QUEUE", 4096), "Bounded telemetry queue size")
+	redisStream := flag.String("redis-stream", getEnv("REDIS_STREAM", "aegis:events"), "Redis telemetry stream")
+	telemetryQueue := flag.Int("telemetry-queue", getEnvInt("AEGIS_TELEMETRY_QUEUE", 4096), "Bounded telemetry queue size")
 	flag.Parse()
 
 	log.Println("==========================================================")
-	log.Println(" Starting Project Mirage Edge Proxy (Phase 2+3)")
+	log.Println(" Starting Project Aegis Edge Proxy (Phase 2+3)")
 	log.Printf(" Target Upstream: %s", *targetURL)
 	log.Printf(" HTTPS Listening: %s", *listenAddr)
 	log.Printf(" Eval Block Mode: %t", *evalBlock)
@@ -83,7 +83,7 @@ func main() {
 
 	p, err := proxy.NewProxy(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize Mirage proxy: %v", err)
+		log.Fatalf("Failed to initialize Aegis proxy: %v", err)
 	}
 
 	var server *http.Server
@@ -116,7 +116,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	<-stop
-	log.Println("\nShutting down Mirage Edge Proxy gracefully...")
+	log.Println("\nShutting down Aegis Edge Proxy gracefully...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -125,7 +125,7 @@ func main() {
 		log.Fatalf("Server forced shutdown error: %v", err)
 	}
 
-	log.Println("Mirage Edge Proxy stopped cleanly.")
+	log.Println("Aegis Edge Proxy stopped cleanly.")
 }
 
 func getEnv(key, defaultValue string) string {

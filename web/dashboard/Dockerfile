@@ -7,8 +7,8 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ARG NEXT_PUBLIC_MIRAGE_WS_URL=ws://localhost:8090/ws
-ENV NEXT_PUBLIC_MIRAGE_WS_URL=$NEXT_PUBLIC_MIRAGE_WS_URL
+ARG NEXT_PUBLIC_AEGIS_WS_URL=ws://localhost:8090/ws
+ENV NEXT_PUBLIC_AEGIS_WS_URL=$NEXT_PUBLIC_AEGIS_WS_URL
 RUN npm run build
 
 FROM node:22-alpine

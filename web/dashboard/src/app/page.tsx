@@ -22,7 +22,7 @@ interface TelemetryEvent {
   bytes_served?: number;
 }
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_MIRAGE_WS_URL;
+const SOCKET_URL = process.env.NEXT_PUBLIC_AEGIS_WS_URL;
 
 function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void }) {
   const links = [
@@ -36,11 +36,11 @@ function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void
   return <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-[#26302d] bg-[#090d13] transition-transform lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
     <div className="flex h-16 items-center gap-3 border-b border-[#26302d] bg-[#111720] px-6">
       <div className="flex h-8 w-8 items-center justify-center rounded bg-[#4edea3] text-[#062519]"><ShieldCheck className="h-5 w-5" /></div>
-      <div><div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Mirage</div><div className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#86948a]">Active Defense</div></div>
+      <div><div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Aegis</div><div className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#86948a]">Active Defense</div></div>
     </div>
     <div className="px-5 pb-2 pt-7 font-mono text-[10px] uppercase tracking-[0.18em] text-[#66736d]">Sinks &amp; monitors</div>
     <nav className="flex flex-col gap-1 px-3">{links.map(({ label, icon: Icon, href, active }) => <a key={href} href={href} onClick={close} className={`flex items-center gap-3 rounded px-4 py-3 font-mono text-xs uppercase tracking-wide transition-colors ${active ? "bg-[#202b2a] font-semibold text-[#4edea3]" : "text-[#aab7b0] hover:bg-[#17201f] hover:text-[#dfe2ef]"}`}><Icon className="h-[18px] w-[18px]" />{label}</a>)}</nav>
-    <div className="mt-auto border-t border-[#26302d] bg-[#111720] p-5"><div className="mb-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-[#86948a]"><span>Telemetry stream</span><span className="flex items-center gap-2 text-[#4edea3]"><span className="h-2 w-2 animate-pulse rounded-full bg-[#4edea3]" /> Live</span></div><div className="rounded bg-[#090d13] p-3 font-mono text-[10px] text-[#66736d]">Current browser session only</div></div>
+    <div className="mt-auto border-t border-[#26302d] bg-[#111720] p-5"><div className="mb-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-[#86948a]"><span>Telemetry stream</span><span className="flex items-center gap-2 text-[#4edea3]"><span className="h-2 w-2 animate-pulse rounded-full bg-[#4edea3]" /> Live</span></div><div className="rounded bg-[#090d13] p-3 font-mono text-[10px] text-[#66736d]">Recent events persisted</div></div>
   </aside>;
 }
 
@@ -71,7 +71,7 @@ export default function Home() {
       socket.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as TelemetryEvent;
-          if (!event.timestamp || !event.source_ip || !event.path) return;
+          if (!event.timestamp || !event.source_ip || !event.path || event.phase.toLowerCase() === "started") return;
           setEvents((current) => [event, ...current].slice(0, 100));
         } catch {
           // Ignore malformed telemetry without interrupting the stream.
@@ -110,7 +110,7 @@ export default function Home() {
     <Sidebar mobileOpen={mobileOpen} close={() => setMobileOpen(false)} />
     <div className="lg:pl-72">
       <header className="fixed left-0 right-0 top-0 z-30 flex h-16 items-center justify-between border-b border-[#26302d] bg-[#0f131c]/95 px-5 backdrop-blur lg:left-72 lg:px-8">
-        <div className="flex items-center gap-3"><button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#aab7b0] hover:bg-[#202b2a] lg:hidden" aria-label="Open navigation"><Menu className="h-5 w-5" /></button><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#4edea3]">Mirage</span><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">/ Live Telemetry Console</span></div>
+        <div className="flex items-center gap-3"><button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#aab7b0] hover:bg-[#202b2a] lg:hidden" aria-label="Open navigation"><Menu className="h-5 w-5" /></button><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#4edea3]">Aegis</span><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">/ Live Telemetry Console</span></div>
         <div className={`flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider ${status === "live" ? "text-[#4edea3]" : "text-[#ffb86b]"}`}><CircleDot className="h-3 w-3" />{status === "live" ? "Stream live" : status}</div>
       </header>
       <main className="min-h-screen px-5 pb-14 pt-24 lg:px-10">

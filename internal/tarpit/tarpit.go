@@ -268,7 +268,7 @@ func (t *AdaptiveTarpit) Duration() time.Duration { return t.cfg.Duration }
 func (t *AdaptiveTarpit) Handle(w http.ResponseWriter, r *http.Request) error {
 	cap := NewResponseCapture()
 	cap.Header().Set("Content-Type", "application/json")
-	cap.Header().Set("X-Backend-Server", "mirage-demo-backend")
+	cap.Header().Set("X-Backend-Server", "aegis-demo-backend")
 	cap.WriteHeader(http.StatusOK)
 	_, _ = cap.Write([]byte(`{"status":"processing","data":[]`))
 	for i := 0; i < 100; i++ {

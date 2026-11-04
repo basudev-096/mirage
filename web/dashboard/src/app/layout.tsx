@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Project Mirage: Active-Defense Command Center",
-  description: "Secure gateway monitor, active tarpit session, and real-time live threat interception feed for Project Mirage active-defense reverse proxy.",
+  title: "Project Aegis: Active-Defense Command Center",
+  description: "Secure gateway monitor, active tarpit session, and real-time live threat interception feed for Project Aegis active-defense reverse proxy.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

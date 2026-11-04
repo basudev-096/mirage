@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/deceive"
-	"github.com/mirage-proxy/mirage/internal/detect"
-	"github.com/mirage-proxy/mirage/internal/tarpit"
-	"github.com/mirage-proxy/mirage/internal/telemetry"
+	"github.com/aegis-proxy/aegis/internal/deceive"
+	"github.com/aegis-proxy/aegis/internal/detect"
+	"github.com/aegis-proxy/aegis/internal/tarpit"
+	"github.com/aegis-proxy/aegis/internal/telemetry"
 )
 
 type fixedDetector struct {
@@ -29,7 +29,7 @@ type headerProbeDeceiver struct{}
 func (headerProbeDeceiver) Handle(w http.ResponseWriter, r *http.Request, category deceive.Category) error {
 	w.Header().Set("Server", "fake-runtime")
 	w.Header().Set("X-Powered-By", "fake-framework")
-	w.Header().Set("X-Backend-Server", "mirage-demo-backend")
+	w.Header().Set("X-Backend-Server", "aegis-demo-backend")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, err := w.Write([]byte(`{"status":"success"}`))
@@ -48,7 +48,7 @@ func TestProxy_TransparentPassthrough(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	// 2. Initialize Mirage Proxy
+	// 2. Initialize Aegis Proxy
 	cfg := Config{
 		TargetURL:     backend.URL,
 		FlushInterval: 10 * time.Millisecond,
@@ -156,7 +156,7 @@ func TestProxy_TLSTermination(t *testing.T) {
 
 func TestProxy_DetectorTagging(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		verdict := r.Header.Get("X-Mirage-Verdict")
+		verdict := r.Header.Get("X-Aegis-Verdict")
 		w.Header().Set("X-Received-Verdict", verdict)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("backend ok"))
@@ -199,7 +199,7 @@ func TestProxy_DetectorTagging(t *testing.T) {
 		t.Errorf("Expected status 200 in tag-only mode, got %d", resp.StatusCode)
 	}
 	if resp.Header.Get("X-Received-Verdict") != "Malicious" {
-		t.Errorf("Expected backend to receive X-Mirage-Verdict 'Malicious', got %q", resp.Header.Get("X-Received-Verdict"))
+		t.Errorf("Expected backend to receive X-Aegis-Verdict 'Malicious', got %q", resp.Header.Get("X-Received-Verdict"))
 	}
 }
 
@@ -243,8 +243,8 @@ func TestProxy_EvalBlock(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403 Forbidden in EvalBlock mode, got %d", resp.StatusCode)
 	}
-	if resp.Header.Get("X-Mirage-Verdict") != "Malicious" {
-		t.Errorf("Expected X-Mirage-Verdict header 'Malicious', got %q", resp.Header.Get("X-Mirage-Verdict"))
+	if resp.Header.Get("X-Aegis-Verdict") != "Malicious" {
+		t.Errorf("Expected X-Aegis-Verdict header 'Malicious', got %q", resp.Header.Get("X-Aegis-Verdict"))
 	}
 }
 
@@ -252,7 +252,7 @@ func TestProxy_CleanAndDeceptiveResponsesShareSanitizedHeaders(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Server", "upstream-runtime")
 		w.Header().Set("X-Powered-By", "upstream-framework")
-		w.Header().Set("X-Backend-Server", "mirage-demo-backend")
+		w.Header().Set("X-Backend-Server", "aegis-demo-backend")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"success"}`))
@@ -303,8 +303,8 @@ func TestProxy_CleanAndDeceptiveResponsesShareSanitizedHeaders(t *testing.T) {
 				t.Errorf("%s %s = %q, want it sanitized", name, header, value)
 			}
 		}
-		if value := response.Header.Get("X-Backend-Server"); value != "mirage-demo-backend" {
-			t.Errorf("%s application header = %q, want mirage-demo-backend", name, value)
+		if value := response.Header.Get("X-Backend-Server"); value != "aegis-demo-backend" {
+			t.Errorf("%s application header = %q, want aegis-demo-backend", name, value)
 		}
 	}
 }

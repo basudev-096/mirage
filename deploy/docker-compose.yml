@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -8,25 +6,27 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - mirage-net
+      - aegis-net
 
   redis:
     image: redis:7-alpine
     ports:
       - "6380:6379"
     networks:
-      - mirage-net
+      - aegis-net
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: mirage
-      POSTGRES_PASSWORD: mirage_password
-      POSTGRES_DB: mirage_telemetry
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis_password
+      POSTGRES_DB: aegis_telemetry
     ports:
       - "5433:5432"
+    volumes:
+      - aegis-postgres-data:/var/lib/postgresql/data
     networks:
-      - mirage-net
+      - aegis-net
 
   proxy:
     build:
@@ -39,12 +39,12 @@ services:
       - redis
       - postgres
     environment:
-      MIRAGE_WAF_TIMEOUT: ${MIRAGE_WAF_TIMEOUT:-250ms}
-      MIRAGE_TARPIT: ${MIRAGE_TARPIT:-true}
+      AEGIS_WAF_TIMEOUT: ${AEGIS_WAF_TIMEOUT:-250ms}
+      AEGIS_TARPIT: ${AEGIS_TARPIT:-true}
       REDIS_ADDR: redis:6379
-      REDIS_STREAM: mirage:events
+      REDIS_STREAM: aegis:events
     networks:
-      - mirage-net
+      - aegis-net
 
   ingest:
     build:
@@ -57,24 +57,27 @@ services:
       - postgres
     environment:
       REDIS_ADDR: redis:6379
-      DATABASE_URL: postgres://mirage:mirage_password@postgres:5432/mirage_telemetry
+      DATABASE_URL: postgres://aegis:aegis_password@postgres:5432/aegis_telemetry
       INGEST_LISTEN_ADDR: :8090
     networks:
-      - mirage-net
+      - aegis-net
 
   dashboard:
     build:
       context: ../web/dashboard
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_MIRAGE_WS_URL: ws://localhost:8090/ws
+        NEXT_PUBLIC_AEGIS_WS_URL: ws://localhost:8090/ws
     ports:
       - "${DASHBOARD_PORT:-3000}:3000"
     depends_on:
       - ingest
     networks:
-      - mirage-net
+      - aegis-net
 
 networks:
-  mirage-net:
+  aegis-net:
     driver: bridge
+
+volumes:
+  aegis-postgres-data:

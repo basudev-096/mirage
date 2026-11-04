@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/tarpit"
+	"github.com/aegis-proxy/aegis/internal/tarpit"
 )
 
 type sample struct {

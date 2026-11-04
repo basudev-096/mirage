@@ -402,11 +402,11 @@ func TestDeceiver_HeaderParity(t *testing.T) {
 		w := httptest.NewRecorder()
 		_ = d.Handle(w, r, cat)
 
-		if got := w.Header().Get("X-Backend-Server"); got != "mirage-demo-backend" {
-			t.Errorf("[%s] expected X-Backend-Server=mirage-demo-backend, got %q", cat, got)
+		if got := w.Header().Get("X-Backend-Server"); got != "aegis-demo-backend" {
+			t.Errorf("[%s] expected X-Backend-Server=aegis-demo-backend, got %q", cat, got)
 		}
 		// Must NOT reveal honeypot identity.
-		for _, hdr := range []string{"X-Honeypot", "X-Mirage-Internal", "X-Deception"} {
+		for _, hdr := range []string{"X-Honeypot", "X-Aegis-Internal", "X-Deception"} {
 			if v := w.Header().Get(hdr); v != "" {
 				t.Errorf("[%s] response must not contain header %q", cat, hdr)
 			}

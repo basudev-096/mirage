@@ -1,4 +1,4 @@
-module github.com/mirage-proxy/mirage
+module github.com/aegis-proxy/aegis
 
 go 1.25.0
 

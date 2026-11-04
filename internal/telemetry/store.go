@@ -14,6 +14,10 @@ type EventStore interface {
 	InsertBatch(context.Context, []Event) error
 }
 
+type EventHistory interface {
+	Recent(context.Context, int) ([]Event, error)
+}
+
 // PostgresStore persists telemetry events in batches.
 type PostgresStore struct {
 	pool *pgxpool.Pool
@@ -92,6 +96,52 @@ INSERT INTO telemetry_events
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) Recent(ctx context.Context, limit int) ([]Event, error) {
+	if limit < 1 {
+		return []Event{}, nil
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT timestamp, source_ip, method, path, request_summary, user_agent, ja3, ja4, verdict,
+       category, payload_class, rule_ids, score, inspection_time_us, action, phase,
+       response_type, response_preview, tarpit_duration_ms, bytes_served
+FROM telemetry_events
+WHERE LOWER(phase) <> 'started'
+ORDER BY timestamp DESC, id DESC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]Event, 0, limit)
+	for rows.Next() {
+		var event Event
+		var ruleIDs []byte
+		if err := rows.Scan(
+			&event.Timestamp, &event.SourceIP, &event.Method, &event.Path, &event.RequestSummary,
+			&event.UserAgent, &event.JA3, &event.JA4, &event.Verdict, &event.Category,
+			&event.PayloadClass, &ruleIDs, &event.Score, &event.InspectionTime,
+			&event.Action, &event.Phase, &event.ResponseType, &event.ResponsePreview,
+			&event.TarpitDuration, &event.BytesServed,
+		); err != nil {
+			return nil, err
+		}
+		if len(ruleIDs) > 0 {
+			if err := json.Unmarshal(ruleIDs, &event.RuleIDs); err != nil {
+				return nil, fmt.Errorf("decode persisted rule IDs: %w", err)
+			}
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func normalizeTimestamp(timestamp time.Time) time.Time {

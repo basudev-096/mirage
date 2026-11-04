@@ -272,7 +272,7 @@ func countUnionColumns(fragment string) int {
 // backendHeaders writes headers that match the real backend's response profile.
 func backendHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Backend-Server", "mirage-demo-backend")
+	w.Header().Set("X-Backend-Server", "aegis-demo-backend")
 }
 
 // jsonEncode writes v as JSON to w.

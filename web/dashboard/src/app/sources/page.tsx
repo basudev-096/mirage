@@ -52,7 +52,7 @@ interface SourceSummary {
   fingerprints: string[];
 }
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_MIRAGE_WS_URL;
+const SOCKET_URL = process.env.NEXT_PUBLIC_AEGIS_WS_URL;
 
 function formatDuration(ms: number) {
   if (!ms) return "—";
@@ -119,7 +119,7 @@ function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void
           <ShieldCheck className="h-5 w-5" />
         </div>
         <div>
-          <div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Mirage</div>
+          <div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Aegis</div>
           <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#86948a]">Active Defense</div>
         </div>
       </div>
@@ -147,7 +147,7 @@ function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void
         <div className="rounded bg-[#090d13] p-3">
           <div className="mb-2 flex justify-between font-mono text-[10px] text-[#86948a]"><span>Session buffer</span><span className="text-[#4edea3]">100 max</span></div>
           <div className="h-1 overflow-hidden rounded bg-[#26302d]"><div className="h-full w-1/4 bg-[#4edea3]" /></div>
-          <div className="mt-2 font-mono text-[10px] text-[#66736d]">Current browser session only</div>
+          <div className="mt-2 font-mono text-[10px] text-[#66736d]">Recent events persisted</div>
         </div>
       </div>
     </aside>
@@ -177,7 +177,7 @@ export default function SourcesPage() {
       socket.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as TelemetryEvent;
-          if (!event.source_ip || !event.timestamp) return;
+          if (!event.source_ip || !event.timestamp || event.phase.toLowerCase() === "started") return;
           setEvents((current) => [event, ...current].slice(0, 100));
         } catch {
           // A malformed event is ignored; the stream remains available.
@@ -226,7 +226,7 @@ export default function SourcesPage() {
         <header className="fixed left-0 right-0 top-0 z-30 flex h-16 items-center justify-between border-b border-[#26302d] bg-[#0f131c]/95 px-5 backdrop-blur lg:left-72 lg:px-8">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#aab7b0] hover:bg-[#202b2a] lg:hidden" aria-label="Open navigation"><Menu className="h-5 w-5" /></button>
-            <span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">Mirage /</span>
+            <span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">Aegis /</span>
             <span className="font-mono text-xs uppercase tracking-[0.18em] text-[#dfe2ef]">Source IPs</span>
           </div>
           <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-wider">

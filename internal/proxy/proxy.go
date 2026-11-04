@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/deceive"
-	"github.com/mirage-proxy/mirage/internal/detect"
-	"github.com/mirage-proxy/mirage/internal/fingerprint"
-	"github.com/mirage-proxy/mirage/internal/tarpit"
-	"github.com/mirage-proxy/mirage/internal/telemetry"
+	"github.com/aegis-proxy/aegis/internal/deceive"
+	"github.com/aegis-proxy/aegis/internal/detect"
+	"github.com/aegis-proxy/aegis/internal/fingerprint"
+	"github.com/aegis-proxy/aegis/internal/tarpit"
+	"github.com/aegis-proxy/aegis/internal/telemetry"
 )
 
 // Config defines the operational parameters for the edge reverse proxy.
@@ -305,7 +305,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if verdict.Malicious {
 		verdictHeader = "Malicious"
 	}
-	r.Header.Set("X-Mirage-Verdict", verdictHeader)
+	r.Header.Set("X-Aegis-Verdict", verdictHeader)
 	useTarpit := verdict.Malicious && p.tarpit != nil && shouldTarpit(r)
 	event := telemetry.Event{
 		Timestamp:      time.Now().UTC(),
@@ -353,7 +353,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// EvalBlock mode: return 403 for gotestwaf scoring runs.
 		if p.cfg.EvalBlock {
-			w.Header().Set("X-Mirage-Verdict", verdictHeader)
+			w.Header().Set("X-Aegis-Verdict", verdictHeader)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"forbidden","message":"Request blocked by security policy"}`))

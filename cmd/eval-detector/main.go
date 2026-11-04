@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mirage-proxy/mirage/internal/detect"
+	"github.com/aegis-proxy/aegis/internal/detect"
 )
 
 type BenchmarkResult struct {
@@ -27,7 +27,7 @@ type BenchmarkResult struct {
 
 func main() {
 	fmt.Println("=================================================================")
-	fmt.Println(" Project Mirage Detection Engine Evaluation & Benchmarking")
+	fmt.Println(" Project Aegis Detection Engine Evaluation & Benchmarking")
 	fmt.Println("=================================================================")
 
 	cfg := detect.DefaultConfig()

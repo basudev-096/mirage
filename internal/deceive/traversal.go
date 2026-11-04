@@ -52,7 +52,7 @@ func (h *traversalHandler) handle(w http.ResponseWriter, r *http.Request, sessio
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("X-Backend-Server", "mirage-demo-backend")
+	w.Header().Set("X-Backend-Server", "aegis-demo-backend")
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprint(w, body)
 	return err
