@@ -154,14 +154,16 @@ func (h *sqliHandler) handleInfoSchemaColumns(w http.ResponseWriter, fragment st
 	rows := make([]map[string]string, len(cols))
 	for i, col := range cols {
 		rows[i] = map[string]string{
-			"TABLE_SCHEMA":    "app_db",
-			"TABLE_NAME":      tableName,
-			"COLUMN_NAME":     col.Name,
+			"TABLE_SCHEMA":     "app_db",
+			"TABLE_NAME":       tableName,
+			"COLUMN_NAME":      col.Name,
 			"ORDINAL_POSITION": fmt.Sprintf("%d", i+1),
-			"COLUMN_TYPE":     col.SQLType,
-			"IS_NULLABLE":     "YES",
-			"COLUMN_KEY":      func() string {
-				if i == 0 { return "PRI" }
+			"COLUMN_TYPE":      col.SQLType,
+			"IS_NULLABLE":      "YES",
+			"COLUMN_KEY": func() string {
+				if i == 0 {
+					return "PRI"
+				}
 				return ""
 			}(),
 		}
@@ -273,6 +275,7 @@ func countUnionColumns(fragment string) int {
 func backendHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Backend-Server", "aegis-demo-backend")
+	w.Header().Set("Cache-Control", "no-store")
 }
 
 // jsonEncode writes v as JSON to w.

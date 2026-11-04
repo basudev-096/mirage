@@ -15,6 +15,7 @@ const (
 	CategoryXSS           Category = "XSS"
 	CategoryPathTraversal Category = "PathTraversal"
 	CategoryRCE           Category = "RCE"
+	CategoryUnauthorized  Category = "Unauthorized"
 	CategoryUnknown       Category = "Unknown"
 )
 

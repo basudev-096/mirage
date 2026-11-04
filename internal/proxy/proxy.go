@@ -3,7 +3,9 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aegis-proxy/aegis/internal/auth"
 	"github.com/aegis-proxy/aegis/internal/deceive"
 	"github.com/aegis-proxy/aegis/internal/detect"
 	"github.com/aegis-proxy/aegis/internal/fingerprint"
@@ -34,6 +37,7 @@ type Config struct {
 	IdleTimeout   time.Duration
 	FlushInterval time.Duration
 	Detector      detect.Detector
+	Authenticator auth.Authenticator
 	Tarpit        tarpit.Tarpit
 	// Deceiver, when non-nil, handles all flagged requests by synthesising a
 	// fake response instead of forwarding to the real backend. This is the
@@ -58,13 +62,15 @@ func DefaultConfig() Config {
 
 // Proxy encapsulates the transparent HTTP/HTTPS reverse proxy handler.
 type Proxy struct {
-	cfg          Config
-	targetURL    *url.URL
-	reverseProxy *httputil.ReverseProxy
-	transport    *http.Transport
-	detector     detect.Detector
-	deceiver     deceive.Deceiver
-	tarpit       tarpit.Tarpit
+	cfg           Config
+	targetURL     *url.URL
+	reverseProxy  *httputil.ReverseProxy
+	transport     *http.Transport
+	detector      detect.Detector
+	deceiver      deceive.Deceiver
+	tarpit        tarpit.Tarpit
+	authenticator auth.Authenticator
+	sessions      *sessionTracker
 }
 
 var bufPool = sync.Pool{
@@ -135,6 +141,13 @@ func (w *responseMetricsWriter) Push(target string, options *http.PushOptions) e
 }
 
 func (w *responseMetricsWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *responseMetricsWriter) responseStatus() int {
+	if !w.wroteHeader {
+		return http.StatusOK
+	}
+	return w.status
+}
 
 func newTrackedBody(orig io.ReadCloser) (*trackedBody, error) {
 	if orig == nil || orig == http.NoBody {
@@ -216,12 +229,14 @@ func NewProxy(cfg Config) (*Proxy, error) {
 	}
 
 	p := &Proxy{
-		cfg:       cfg,
-		targetURL: parsedURL,
-		transport: transport,
-		detector:  cfg.Detector,
-		deceiver:  cfg.Deceiver,
-		tarpit:    cfg.Tarpit,
+		cfg:           cfg,
+		targetURL:     parsedURL,
+		transport:     transport,
+		detector:      cfg.Detector,
+		authenticator: cfg.Authenticator,
+		deceiver:      cfg.Deceiver,
+		tarpit:        cfg.Tarpit,
+		sessions:      newSessionTracker(),
 	}
 
 	rp := &httputil.ReverseProxy{
@@ -275,9 +290,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metrics := &responseMetricsWriter{ResponseWriter: w}
 	w = fingerprint.NewWriter(metrics)
 	if p.detector == nil {
+		r.Header.Del("X-Aegis-Principal")
+		if p.authenticator != nil {
+			principal := p.authenticator.Authenticate(r)
+			if !principal.Authorized {
+				if p.deceiver != nil {
+					_ = p.deceiver.Handle(w, r, deceive.CategoryUnauthorized)
+				} else {
+					http.Error(w, "request diverted", http.StatusUnauthorized)
+				}
+				return
+			}
+			r.Header.Del("Authorization")
+			r.Header.Del("X-Aegis-Principal")
+			r.Header.Set("X-Aegis-Principal", principal.Name)
+		}
 		p.reverseProxy.ServeHTTP(w, r)
 		return
 	}
+	r.Header.Del("X-Aegis-Principal")
 
 	var tb *trackedBody
 	if r.Body != nil && r.Body != http.NoBody {
@@ -290,6 +321,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = tb
 	}
+	var recordedBody []byte
+	if tb != nil {
+		recordedBody = append([]byte(nil), tb.buf...)
+	}
 
 	verdict, err := p.detector.Inspect(r.Context(), r)
 	if err != nil {
@@ -301,25 +336,86 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tb.Reset()
 	}
 
+	principal := auth.Principal{Name: "anonymous", Authorized: true}
+	authorization := "disabled"
+	if p.authenticator != nil {
+		principal = p.authenticator.Authenticate(r)
+		if principal.Authorized {
+			authorization = "authorized"
+		} else {
+			authorization = "unauthorized"
+		}
+	}
+	if p.authenticator != nil {
+		// The bearer credential is only for the edge gate. It is never forwarded
+		// to the backend or copied into telemetry.
+		r.Header.Del("Authorization")
+		if principal.Authorized {
+			r.Header.Set("X-Aegis-Principal", principal.Name)
+		}
+	}
+	if !principal.Authorized {
+		if verdict.Category == "" || verdict.Category == "Clean" {
+			verdict.Category = string(deceive.CategoryUnauthorized)
+		}
+		verdict.Malicious = true
+		verdict.Score += 5
+		verdict.RuleIDs = append(verdict.RuleIDs, detect.RuleID("AUTH-UNAUTHORIZED"))
+	}
+
 	verdictHeader := "Clean"
 	if verdict.Malicious {
 		verdictHeader = "Malicious"
+		if !principal.Authorized {
+			verdictHeader = "Unauthorized"
+		}
 	}
 	r.Header.Set("X-Aegis-Verdict", verdictHeader)
-	useTarpit := verdict.Malicious && p.tarpit != nil && shouldTarpit(r)
+	diverted := p.cfg.EvalBlock || (verdict.Malicious && (p.deceiver != nil || p.tarpit != nil)) || !principal.Authorized
+	now := time.Now().UTC()
+	source := sourceIP(r.RemoteAddr)
+	clientDigest := sha256.Sum256([]byte(source + "\x00" + r.UserAgent() + "\x00" + principal.Name + "\x00" + authorization))
+	sessionID, sessionRequests, sessionDiverted := p.sessions.observe(hex.EncodeToString(clientDigest[:]), now, diverted)
+	if sessionDiverted {
+		diverted = true
+		if verdict.Category == "" || verdict.Category == "Clean" {
+			verdict.Category = string(deceive.CategoryUnknown)
+		}
+		verdict.Malicious = true
+		verdictHeader = "Malicious"
+		r.Header.Set("X-Aegis-Session-Diverted", "true")
+	}
+	useTarpit := false
+	r.Header.Set("X-Aegis-Session-ID", sessionID)
+	requestID := newTraceID("req")
+	bodyPreview := requestBodyPreview(r, recordedBody)
+	r.Header.Set("X-Aegis-Verdict", verdictHeader)
+	useTarpit = diverted && p.tarpit != nil && shouldTarpit(r)
 	event := telemetry.Event{
-		Timestamp:      time.Now().UTC(),
-		SourceIP:       sourceIP(r.RemoteAddr),
-		Method:         r.Method,
-		Path:           r.URL.Path,
-		RequestSummary: requestSummary(r),
-		UserAgent:      r.UserAgent(),
-		Verdict:        verdictHeader,
-		Category:       verdict.Category,
-		PayloadClass:   verdict.Category,
-		Score:          verdict.Score,
-		InspectionTime: verdict.InspectionTime.Microseconds(),
-		Action:         "passthrough",
+		RequestID:       requestID,
+		SessionID:       sessionID,
+		SessionRequests: sessionRequests,
+		Timestamp:       now,
+		SourceIP:        source,
+		Principal:       principal.Name,
+		Authorization:   authorization,
+		Method:          r.Method,
+		Path:            r.URL.Path,
+		RequestSummary:  requestSummary(r),
+		RequestPreview:  requestSummary(r),
+		BodyPreview:     bodyPreview,
+		ContentType:     r.Header.Get("Content-Type"),
+		UserAgent:       r.UserAgent(),
+		Verdict:         verdictHeader,
+		Category:        verdict.Category,
+		PayloadClass:    verdict.Category,
+		Score:           verdict.Score,
+		InspectionTime:  verdict.InspectionTime.Microseconds(),
+		Action:          "passthrough",
+		ResponseType:    "real_backend_response",
+	}
+	if bodyPreview != "" {
+		event.RequestPreview += "\n" + bodyPreview
 	}
 	ruleIDs := make([]string, len(verdict.RuleIDs))
 	for i, ruleID := range verdict.RuleIDs {
@@ -328,30 +424,38 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	event.RuleIDs = ruleIDs
 	started := time.Now()
 	if p.cfg.Telemetry != nil {
-		if verdict.Malicious {
+		if diverted {
 			event.Action = "honeypot"
+			event.ResponseType = "fake_honeypot_response"
 			if useTarpit {
 				event.Action = "tarpit"
+				event.ResponseType = "adaptive_fake_response"
 			}
 		}
-		if verdict.Malicious {
-			event.Phase = "started"
+		event.Phase = "inspected"
+		p.cfg.Telemetry.Publish(event)
+		if diverted {
+			event.Phase = "diverted"
 			p.cfg.Telemetry.Publish(event)
 		}
 		defer func() {
 			event.Phase = "completed"
-			event.TarpitDuration = time.Since(started).Milliseconds()
+			event.DurationMS = time.Since(started).Milliseconds()
+			if event.Action == "tarpit" {
+				event.TarpitDuration = event.DurationMS
+			}
 			event.BytesServed = metrics.bytes
+			event.ResponseStatus = metrics.responseStatus()
 			p.cfg.Telemetry.Publish(event)
 		}()
 	}
 
-	if verdict.Malicious {
+	if diverted {
 		if tb != nil {
 			tb.Close()
 		}
 
-		// EvalBlock mode: return 403 for gotestwaf scoring runs.
+		// EvalBlock mode is reserved for detector evaluation runs.
 		if p.cfg.EvalBlock {
 			w.Header().Set("X-Aegis-Verdict", verdictHeader)
 			w.Header().Set("Content-Type", "application/json")
@@ -401,6 +505,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			copyCapturedResponse(w, captured)
 			return
 		}
+		// Fail closed if deception is unavailable. A flagged or unauthorized
+		// request must never fall through to the real backend.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success","message":"No results found","data":[]}`))
+		return
 	}
 
 	p.reverseProxy.ServeHTTP(w, r)
@@ -425,27 +535,9 @@ func shouldTarpit(r *http.Request) bool {
 	return false
 }
 
-func requestSummary(r *http.Request) string {
-	query := r.URL.Query()
-	for key, values := range query {
-		if len(values) > 0 {
-			return r.Method + " " + r.URL.Path + "?" + key + "=" + truncateActivity(values[0])
-		}
-	}
-	return r.Method + " " + r.URL.Path
-}
-
 func previewResponse(body []byte) string {
 	const maxPreview = 512
 	return string(body[:minInt(len(body), maxPreview)])
-}
-
-func truncateActivity(value string) string {
-	const maxValue = 160
-	if len(value) <= maxValue {
-		return value
-	}
-	return value[:maxValue] + "..."
 }
 
 func copyCapturedResponse(w http.ResponseWriter, captured *tarpit.ResponseCapture) {

@@ -28,6 +28,7 @@ function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void
   const links = [
     { label: "Overview", icon: LayoutDashboard, href: "/", active: true },
     { label: "Live Events", icon: Radio, href: "/events" },
+    { label: "Honeypot Sandbox", icon: ShieldAlert, href: "/honeypot" },
     { label: "Source IPs", icon: Globe2, href: "/sources" },
     { label: "Attack Categories", icon: BarChart3, href: "/categories" },
     { label: "Tarpit Activity", icon: Timer, href: "/tarpits" },

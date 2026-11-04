@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aegis-proxy/aegis/internal/auth"
 	"github.com/aegis-proxy/aegis/internal/deceive"
 	"github.com/aegis-proxy/aegis/internal/detect"
 	"github.com/aegis-proxy/aegis/internal/proxy"
@@ -30,6 +31,7 @@ func main() {
 	redisAddr := flag.String("redis-addr", getEnv("REDIS_ADDR", "127.0.0.1:6380"), "Redis address for telemetry")
 	redisStream := flag.String("redis-stream", getEnv("REDIS_STREAM", "aegis:events"), "Redis telemetry stream")
 	telemetryQueue := flag.Int("telemetry-queue", getEnvInt("AEGIS_TELEMETRY_QUEUE", 4096), "Bounded telemetry queue size")
+	authTokens := flag.String("auth-tokens", getEnv("AEGIS_AUTH_TOKENS", ""), "Comma-separated principal=Bearer-token pairs; an empty list allows anonymous access")
 	flag.Parse()
 
 	log.Println("==========================================================")
@@ -39,6 +41,7 @@ func main() {
 	log.Printf(" Eval Block Mode: %t", *evalBlock)
 	log.Printf(" Adaptive Tarpit: %t", *tarpitEnabled)
 	log.Printf(" WAF Inspection Timeout: %s", *wafTimeout)
+	log.Printf(" Authorized principals: %d", len(auth.ParseCredentials(*authTokens)))
 	if !*evalBlock {
 		log.Println(" Deception Mode: ACTIVE (fake responses for flagged requests)")
 	}
@@ -66,6 +69,7 @@ func main() {
 	cfg.TargetURL = *targetURL
 	cfg.ListenAddr = *listenAddr
 	cfg.Detector = detector
+	cfg.Authenticator = auth.NewTokenAuthenticator(auth.ParseCredentials(*authTokens))
 	cfg.EvalBlock = *evalBlock
 	cfg.Telemetry = telemetryPublisher
 	// Wire the deception sandbox for production divert mode.

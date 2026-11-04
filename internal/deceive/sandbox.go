@@ -39,6 +39,8 @@ func (d *SandboxDeceiver) Handle(w http.ResponseWriter, r *http.Request, categor
 		return d.traversal.handle(w, r, sessionIP)
 	case CategoryRCE:
 		return d.rce.handle(w, r, sessionIP)
+	case CategoryUnauthorized:
+		return d.handleUnauthorized(w, r, sessionIP)
 	default:
 		// Unknown category: return an innocuous empty-result response.
 		backendHeaders(w)
@@ -46,6 +48,26 @@ func (d *SandboxDeceiver) Handle(w http.ResponseWriter, r *http.Request, categor
 		_, err := w.Write([]byte(`{"status":"success","message":"No results found","data":[]}`))
 		return err
 	}
+}
+
+func (d *SandboxDeceiver) handleUnauthorized(w http.ResponseWriter, r *http.Request, sessionIP string) error {
+	backendHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	if r.URL.Path == "/api/profile" || r.URL.Path == "/api/account" {
+		faker := fakerFor(sessionIP, "profile")
+		return jsonEncode(w, map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"id":         faker.Number(1000, 999999),
+				"username":   faker.Username(),
+				"name":       faker.Name(),
+				"email":      faker.Email(),
+				"role":       "member",
+				"department": []string{"Engineering", "Operations", "Research", "Support"}[faker.Number(0, 3)],
+			},
+		})
+	}
+	return jsonEncode(w, map[string]any{"status": "success", "message": "Request completed", "data": []any{}})
 }
 
 // extractIP returns the host part of a remoteAddr "host:port" string.

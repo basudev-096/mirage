@@ -59,6 +59,12 @@ services:
       REDIS_ADDR: redis:6379
       DATABASE_URL: postgres://aegis:aegis_password@postgres:5432/aegis_telemetry
       INGEST_LISTEN_ADDR: :8090
+      AEGIS_PROXY_URL: https://proxy:8443
+      AEGIS_PROXY_TLS_NAME: localhost
+      AEGIS_PROXY_CA: /app/certs/server.crt
+      AEGIS_DEMO_ENABLED: "true"
+    volumes:
+      - ./certs/server.crt:/app/certs/server.crt:ro
     networks:
       - aegis-net
 
@@ -68,6 +74,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_AEGIS_WS_URL: ws://localhost:8090/ws
+        NEXT_PUBLIC_AEGIS_API_URL: http://localhost:8090
     ports:
       - "${DASHBOARD_PORT:-3000}:3000"
     depends_on:

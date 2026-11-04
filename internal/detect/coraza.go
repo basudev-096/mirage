@@ -101,7 +101,6 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 		return verdict, ErrWAFBusy
 	}
 
-	// 2. Snapshot request metadata, clone headers, and read body slice synchronously
 	clientHost := req.RemoteAddr
 	uri := req.URL.RequestURI()
 	if uri == "" {
@@ -123,7 +122,6 @@ func (d *CorazaDetector) Inspect(ctx context.Context, req *http.Request) (Verdic
 		}
 	}
 
-	// 3. Set per-request context deadline
 	inspectCtx, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
 	defer cancel()
 
