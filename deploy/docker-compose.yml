@@ -59,6 +59,12 @@ services:
       REDIS_ADDR: redis:6379
       DATABASE_URL: postgres://mirage:mirage_password@postgres:5432/mirage_telemetry
       INGEST_LISTEN_ADDR: :8090
+      MIRAGE_PROXY_URL: https://proxy:8443
+      MIRAGE_PROXY_TLS_NAME: localhost
+      MIRAGE_PROXY_CA: /app/certs/server.crt
+      MIRAGE_DEMO_ENABLED: "true"
+    volumes:
+      - ./certs/server.crt:/app/certs/server.crt:ro
     networks:
       - mirage-net
 
@@ -68,6 +74,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_MIRAGE_WS_URL: ws://localhost:8090/ws
+        NEXT_PUBLIC_MIRAGE_API_URL: http://localhost:8090
     ports:
       - "${DASHBOARD_PORT:-3000}:3000"
     depends_on:

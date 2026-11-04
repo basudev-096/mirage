@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Project Mirage
 
-## Getting Started
+Project Mirage is a defensive Layer 7 reverse proxy with Coraza detection,
+synthetic deception responses, an adaptive RTT-aware tarpit, and a live
+telemetry command center.
 
-First, run the development server:
+## Run the lab
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+make test
+make build
+make docker-up
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The lab exposes the proxy on `https://localhost:8443`, the dashboard on
+`http://localhost:3000` (override with `DASHBOARD_PORT`), ingest health on `http://localhost:8090/healthz`,
+Redis on `localhost:6380`, and Postgres on `localhost:5433`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The compose lab enables automatic active defense by default. Ordinary malicious
+requests receive immediate synthetic honeypot responses; scanner-like user
+agents and sensitive probe paths are automatically sent through the adaptive
+tarpit. No runtime mode switch is needed. Set `MIRAGE_TARPIT=false` only to
+disable tarpit capability entirely.
+Telemetry remains asynchronous and bounded when Redis is slow or unavailable.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Development checks
 
-## Learn More
+```bash
+make test
+make vet
+make dashboard-lint
+make dashboard-build
+```
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The dashboard can also run independently with `cd web/dashboard && npm run dev`.
+Set `NEXT_PUBLIC_MIRAGE_WS_URL=ws://localhost:8090/ws` to connect it to the
+ingest service during local development.

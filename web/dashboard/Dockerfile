@@ -8,7 +8,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG NEXT_PUBLIC_MIRAGE_WS_URL=ws://localhost:8090/ws
+ARG NEXT_PUBLIC_MIRAGE_API_URL=http://localhost:8090
 ENV NEXT_PUBLIC_MIRAGE_WS_URL=$NEXT_PUBLIC_MIRAGE_WS_URL
+ENV NEXT_PUBLIC_MIRAGE_API_URL=$NEXT_PUBLIC_MIRAGE_API_URL
 RUN npm run build
 
 FROM node:22-alpine
