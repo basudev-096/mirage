@@ -3,13 +3,19 @@
 package deception
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/brianvoe/gofakeit/v7"
 	"github.com/xwb1989/sqlparser"
 )
 
@@ -31,11 +37,27 @@ type Result struct {
 }
 
 type Engine struct {
-	rows int
+	rows   int
+	secret []byte
 }
 
+const defaultSeedSecret = "mirage-development-seed"
+
 func New() *Engine {
-	return &Engine{rows: 3}
+	secret := os.Getenv("MIRAGE_DECEPTION_SEED")
+	if secret == "" {
+		secret = defaultSeedSecret
+	}
+	return NewWithSeed(secret)
+}
+
+// NewWithSeed creates a deception engine whose synthetic identities are
+// stable for the configured secret, session, and virtual target.
+func NewWithSeed(secret string) *Engine {
+	if secret == "" {
+		secret = defaultSeedSecret
+	}
+	return &Engine{rows: 3, secret: []byte(secret)}
 }
 
 func (e *Engine) AnalyzeRequest(r *http.Request, body []byte) Result {
@@ -46,7 +68,7 @@ func (e *Engine) AnalyzeRequest(r *http.Request, body []byte) Result {
 	statement := statementCandidate(payload)
 	if statement == "" {
 		if looksLikeSQLInjection(payload) {
-			return e.fallback(payload)
+			return e.fallback(payload, r.Header.Get("X-Mirage-Session-ID"))
 		}
 		return Result{}
 	}
@@ -55,7 +77,7 @@ func (e *Engine) AnalyzeRequest(r *http.Request, body []byte) Result {
 		if !looksLikeSQLInjection(payload) {
 			return Result{}
 		}
-		return e.fallback(payload)
+		return e.fallback(payload, r.Header.Get("X-Mirage-Session-ID"))
 	}
 
 	target := targetFromStatement(parsed)
@@ -68,10 +90,10 @@ func (e *Engine) AnalyzeRequest(r *http.Request, body []byte) Result {
 	if len(target.Columns) == 0 {
 		target.Columns = []string{"id", "status", "created_at"}
 	}
-	return e.result(target, "sql_ast_projection")
+	return e.result(target, "sql_ast_projection", r.Header.Get("X-Mirage-Session-ID"))
 }
 
-func (e *Engine) result(target Target, class string) Result {
+func (e *Engine) result(target Target, class, sessionID string) Result {
 	if target.Database == "" {
 		target.Database = "mirage_honeypot"
 	}
@@ -83,19 +105,12 @@ func (e *Engine) result(target Target, class string) Result {
 	}
 	body := map[string]any{
 		"status": "success",
-		"data":   fakeRows(target.Columns, target.Table, e.rows),
-		"deception": map[string]any{
-			"engine":            "mirage-sql-honeypot",
-			"target_database":   target.Database,
-			"target_schema":     target.Schema,
-			"target_table":      target.Table,
-			"target_columns":    target.Columns,
-			"operation":         target.Operation,
-			"records_generated": e.rows,
-		},
+		"data":   e.fakeRows(sessionID, target, e.rows),
 	}
 	encoded, _ := json.Marshal(body)
 	metadata, _ := json.Marshal(map[string]any{
+		"engine":            "mirage-sql-honeypot",
+		"strategy":          class,
 		"target_database":   target.Database,
 		"target_schema":     target.Schema,
 		"target_table":      target.Table,
@@ -113,7 +128,7 @@ func (e *Engine) result(target Target, class string) Result {
 	}
 }
 
-func (e *Engine) fallback(payload string) Result {
+func (e *Engine) fallback(payload, sessionID string) Result {
 	operation := "SELECT"
 	if strings.Contains(strings.ToLower(payload), "drop ") {
 		operation = "DROP"
@@ -128,7 +143,7 @@ func (e *Engine) fallback(payload string) Result {
 		Table:     inferTable(payload),
 		Columns:   []string{"id", "status", "created_at"},
 		Operation: operation,
-	}, "sql_injection_fallback")
+	}, "sql_injection_fallback", sessionID)
 }
 
 func targetFromStatement(statement sqlparser.Statement) Target {
@@ -169,27 +184,97 @@ func targetFromStatement(statement sqlparser.Statement) Target {
 	return target
 }
 
-func fakeRows(columns []string, table string, count int) []map[string]any {
+func (e *Engine) fakeRows(sessionID string, target Target, count int) []map[string]any {
 	rows := make([]map[string]any, 0, count)
 	for row := 1; row <= count; row++ {
-		item := make(map[string]any, len(columns))
-		for _, column := range columns {
-			switch strings.ToLower(column) {
-			case "id", "user_id", "account_id":
-				item[column] = row
-			case "username", "name":
-				item[column] = fmt.Sprintf("guest_%s_%d", sanitizeIdentifier(table), row)
-			case "email":
-				item[column] = fmt.Sprintf("guest_%d@mirage.invalid", row)
-			case "password", "token", "secret":
-				item[column] = "redacted-honeypot-value"
-			default:
-				item[column] = fmt.Sprintf("synthetic_%d", row)
-			}
+		item := make(map[string]any, len(target.Columns))
+		for _, column := range target.Columns {
+			item[column] = e.syntheticValue(sessionID, target, row, column)
 		}
 		rows = append(rows, item)
 	}
 	return rows
+}
+
+func (e *Engine) syntheticValue(sessionID string, target Target, row int, column string) any {
+	name := strings.ToLower(strings.TrimSpace(column))
+	faker := gofakeit.New(e.seed(sessionID, target, row, name))
+	switch name {
+	case "id", "user_id", "account_id":
+		return faker.IntRange(10000, 99999999)
+	case "username", "user_name":
+		return e.syntheticUsername(sessionID, target, row)
+	case "name", "full_name":
+		return faker.Name()
+	case "first_name":
+		return faker.FirstName()
+	case "last_name":
+		return faker.LastName()
+	case "email":
+		return e.syntheticUsername(sessionID, target, row) + "@example.invalid"
+	case "phone", "phone_number":
+		return fmt.Sprintf("+1-202-555-%04d", faker.IntRange(0, 9999))
+	case "password", "password_hash":
+		return "synthetic-hash-" + hexDigest(e.seedBytes(sessionID, target, row, name))[:24]
+	case "token", "api_key", "secret":
+		return "synthetic-" + hexDigest(e.seedBytes(sessionID, target, row, name))[:32]
+	case "address":
+		return faker.Street()
+	case "city":
+		return faker.City()
+	case "country":
+		return faker.Country()
+	case "company":
+		return faker.Company()
+	case "age":
+		return faker.IntRange(18, 85)
+	case "created_at", "updated_at":
+		base := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+		return faker.DateRange(base, time.Date(2025, time.December, 31, 23, 59, 59, 0, time.UTC)).Format(time.RFC3339)
+	case "status":
+		return []string{"active", "pending", "suspended"}[faker.IntRange(0, 2)]
+	case "role":
+		return []string{"user", "admin", "analyst"}[faker.IntRange(0, 2)]
+	default:
+		return fmt.Sprintf("synthetic_%s_%s", sanitizeIdentifier(column), sanitizeIdentifier(faker.Word()))
+	}
+}
+
+func (e *Engine) syntheticUsername(sessionID string, target Target, row int) string {
+	faker := gofakeit.New(e.seed(sessionID, target, row, "identity"))
+	return fmt.Sprintf("%s_%d", sanitizeIdentifier(strings.ToLower(faker.Username())), row)
+}
+
+func (e *Engine) seed(sessionID string, target Target, row int, column string) uint64 {
+	digest := e.seedBytes(sessionID, target, row, column)
+	return binary.BigEndian.Uint64(digest[:8])
+}
+
+func (e *Engine) seedBytes(sessionID string, target Target, row int, column string) []byte {
+	context := strings.Join([]string{
+		"mirage-deception-v1",
+		normalize(sessionID, "anonymous"),
+		normalize(target.Database, "mirage_honeypot"),
+		normalize(target.Schema, "public"),
+		normalize(target.Table, "virtual_records"),
+		fmt.Sprintf("%d", row),
+		normalize(column, "value"),
+	}, "\x00")
+	mac := hmac.New(sha256.New, e.secret)
+	_, _ = mac.Write([]byte(context))
+	return mac.Sum(nil)
+}
+
+func hexDigest(value []byte) string {
+	return fmt.Sprintf("%x", value)
+}
+
+func normalize(value, fallback string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func extractPayload(r *http.Request, body []byte) string {

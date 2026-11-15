@@ -3,6 +3,7 @@ module github.com/mirage-proxy/mirage
 go 1.25.0
 
 require (
+	github.com/brianvoe/gofakeit/v7 v7.18.4
 	github.com/corazawaf/coraza-coreruleset/v4 v4.9.0
 	github.com/corazawaf/coraza/v3 v3.2.1
 	github.com/gorilla/websocket v1.5.3

@@ -473,8 +473,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if deceptionResult.Recognized {
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("X-Mirage-Deception", deceptionResult.PayloadClass)
-			w.Header().Set("X-Mirage-Target-Table", deceptionResult.Target.Table)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(deceptionResult.Body)
 			return

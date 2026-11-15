@@ -41,6 +41,7 @@ services:
     environment:
       MIRAGE_WAF_TIMEOUT: ${MIRAGE_WAF_TIMEOUT:-250ms}
       MIRAGE_TARPIT: ${MIRAGE_TARPIT:-true}
+      MIRAGE_DECEPTION_SEED: ${MIRAGE_DECEPTION_SEED:-mirage-development-seed}
       REDIS_ADDR: redis:6379
       REDIS_STREAM: mirage:events
     networks:

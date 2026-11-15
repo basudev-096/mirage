@@ -53,6 +53,7 @@ Optional environment variables can be set before starting:
 ```bash
 export MIRAGE_WAF_TIMEOUT=250ms
 export MIRAGE_TARPIT=true
+export MIRAGE_DECEPTION_SEED='replace-with-a-long-random-secret'
 export DASHBOARD_PORT=3000
 ```
 
@@ -60,6 +61,9 @@ Important proxy settings:
 
 - `MIRAGE_WAF_TIMEOUT`: maximum WAF inspection time
 - `MIRAGE_TARPIT`: enables adaptive tarpit handling
+- `MIRAGE_DECEPTION_SEED`: HMAC secret used to derive stable, session-specific
+  synthetic honeypot identities. Set this to a long secret in deployed
+  environments; keeping it unchanged preserves identities across restarts.
 - `REDIS_ADDR`: Redis address used by the proxy and ingest service
 - `REDIS_STREAM`: Redis telemetry stream name
 - `DATABASE_URL`: PostgreSQL connection string for the ingest service
@@ -175,12 +179,12 @@ curl -k --get "https://localhost:8443/search" \
 The response is a synthetic database result and includes:
 
 ```text
-X-Mirage-Deception: sql_ast_projection
-X-Mirage-Target-Table: users
+{"status":"success","data":[{"username":"synthetic_username","password":"synthetic-hash-..."}]}
 ```
 
-The JSON response identifies the virtual database, table, columns, operation,
-and number of generated records. The same fields are written to telemetry:
+Internal deception metadata is never returned in the attacker-facing response.
+The virtual database, table, columns, operation, strategy, and number of
+generated records are written only to telemetry:
 `deception_type`, `target_database`, `target_schema`, `target_table`,
 `target_columns`, `operation`, and `response_metadata`.
 

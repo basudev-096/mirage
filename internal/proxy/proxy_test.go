@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,11 +272,28 @@ func TestProxy_SQLiUsesStructuredDeception(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.StatusCode)
 	}
-	if response.Header.Get("X-Mirage-Deception") != "sql_ast_projection" {
-		t.Fatalf("deception header = %q, want sql_ast_projection", response.Header.Get("X-Mirage-Deception"))
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if response.Header.Get("X-Mirage-Target-Table") != "users" {
-		t.Fatalf("target table header = %q, want users", response.Header.Get("X-Mirage-Target-Table"))
+	for _, forbidden := range []string{
+		"deception",
+		"engine",
+		"mirage-sql-honeypot",
+		"target_database",
+		"target_schema",
+		"target_table",
+		"target_columns",
+		"records_generated",
+	} {
+		if strings.Contains(strings.ToLower(string(body)), forbidden) {
+			t.Fatalf("attacker-facing response exposed %q: %s", forbidden, body)
+		}
+	}
+	for _, header := range []string{"X-Mirage-Deception", "X-Mirage-Target-Table"} {
+		if value := response.Header.Get(header); value != "" {
+			t.Fatalf("attacker-facing response exposed %s: %q", header, value)
+		}
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -285,7 +303,8 @@ func TestProxy_SQLiUsesStructuredDeception(t *testing.T) {
 			if event.Phase == "completed" {
 				sink.mu.Unlock()
 				if event.Action != "honeypot" || event.TargetTable != "users" ||
-					event.Operation != "SELECT" || len(event.TargetColumns) < 2 {
+					event.Operation != "SELECT" || len(event.TargetColumns) < 2 ||
+					!strings.Contains(event.ResponseMetadata, `"engine":"mirage-sql-honeypot"`) {
 					t.Fatalf("unexpected deception event: %+v", event)
 				}
 				return
