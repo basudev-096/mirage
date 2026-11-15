@@ -1,4 +1,4 @@
-# Project Aegis Makefile
+# Project Mirage Makefile
 
 GO := ~/.local/go/bin/go
 GO_FLAGS := -race
@@ -12,13 +12,13 @@ certs:
 	@mkdir -p deploy/certs
 	@if [ ! -f deploy/certs/server.crt ]; then \
 		echo "Generating self-signed TLS certificates for development lab..."; \
-		openssl req -x509 -newkey rsa:2048 -nodes -keyout deploy/certs/server.key -out deploy/certs/server.crt -days 365 -subj "/CN=localhost/O=Project Aegis Lab" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"; \
+		openssl req -x509 -newkey rsa:2048 -nodes -keyout deploy/certs/server.key -out deploy/certs/server.crt -days 365 -subj "/CN=localhost/O=Project Mirage Lab" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"; \
 	fi
 
 build:
-	@echo "Building Aegis services..."
-	@$(GO) build -o bin/aegis-proxy ./cmd/aegis-proxy
-	@$(GO) build -o bin/aegis-ingest ./cmd/aegis-ingest
+	@echo "Building Mirage services..."
+	@$(GO) build -o bin/mirage-proxy ./cmd/mirage-proxy
+	@$(GO) build -o bin/mirage-ingest ./cmd/mirage-ingest
 
 test: certs
 	@echo "Running unit tests..."

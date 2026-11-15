@@ -1,14 +1,14 @@
-module github.com/aegis-proxy/aegis
+module github.com/mirage-proxy/mirage
 
 go 1.25.0
 
 require (
-	github.com/brianvoe/gofakeit/v6 v6.28.0
 	github.com/corazawaf/coraza-coreruleset/v4 v4.9.0
 	github.com/corazawaf/coraza/v3 v3.2.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/redis/go-redis/v9 v9.7.0
+	github.com/xwb1989/sqlparser v0.0.0-20180606152119-120387863bf2
 	golang.org/x/sys v0.47.0
 )
 

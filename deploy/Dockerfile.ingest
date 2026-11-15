@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o aegis-ingest ./cmd/aegis-ingest
+RUN go build -o aegis-ingest ./cmd/mirage-ingest
 
 FROM alpine:latest
 WORKDIR /app

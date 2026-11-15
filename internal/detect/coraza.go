@@ -48,7 +48,7 @@ func NewCorazaDetector(cfg Config) (*CorazaDetector, error) {
 		SecRequestBodyInMemoryLimit %d
 		SecRequestBodyLimitAction ProcessPartial
 		SecResponseBodyAccess Off
-		SecComponentSignature "Aegis-WAF/v1.0"
+		SecComponentSignature "Mirage-WAF/v1.0"
 		Include @crs-setup.conf.example
 		Include @owasp_crs/*.conf
 	`, cfg.MaxBodyInspectSize, cfg.MaxBodyInspectSize)

@@ -1,14 +1,14 @@
-# Project Aegis
+# Project Mirage
 
-Project Aegis is a Go Layer 7 active-defense reverse proxy and honeypot gateway. It detects malicious HTTP requests, routes them to synthetic deception responses or an adaptive tarpit, and publishes telemetry to a live Next.js dashboard.
+Project Mirage is a Go Layer 7 active-defense reverse proxy. It detects malicious HTTP requests, routes scanner-like traffic to an adaptive tarpit, and publishes telemetry to a live Next.js dashboard.
 
 ## Architecture
 
 ```text
 Client
-  -> Aegis HTTPS proxy (:8443)
+  -> Mirage HTTPS proxy (:8443)
       -> clean requests: demo backend (:8080)
-      -> malicious requests: deception sandbox / adaptive tarpit
+      -> scanner-like malicious requests: adaptive tarpit
       -> telemetry: Redis Streams -> ingest -> PostgreSQL
                                       -> WebSocket dashboard (:8090)
 ```
@@ -40,7 +40,7 @@ docker info
 The default Docker Compose configuration starts the complete lab:
 
 - Demo backend: `http://localhost:8080`
-- Aegis HTTPS proxy: `https://localhost:8443`
+- Mirage HTTPS proxy: `https://localhost:8443`
 - Redis: `localhost:6380`
 - PostgreSQL: `localhost:5433`
 - Telemetry ingest and WebSocket: `http://localhost:8090`
@@ -51,15 +51,15 @@ The `make docker-up` target generates a self-signed development certificate in `
 Optional environment variables can be set before starting:
 
 ```bash
-export AEGIS_WAF_TIMEOUT=250ms
-export AEGIS_TARPIT=true
+export MIRAGE_WAF_TIMEOUT=250ms
+export MIRAGE_TARPIT=true
 export DASHBOARD_PORT=3000
 ```
 
 Important proxy settings:
 
-- `AEGIS_WAF_TIMEOUT`: maximum WAF inspection time
-- `AEGIS_TARPIT`: enables adaptive tarpit handling
+- `MIRAGE_WAF_TIMEOUT`: maximum WAF inspection time
+- `MIRAGE_TARPIT`: enables adaptive tarpit handling
 - `REDIS_ADDR`: Redis address used by the proxy and ingest service
 - `REDIS_STREAM`: Redis telemetry stream name
 - `DATABASE_URL`: PostgreSQL connection string for the ingest service
@@ -122,7 +122,7 @@ Check the demo backend directly:
 curl -i "http://localhost:8080/search?q=normal"
 ```
 
-Check the Aegis proxy:
+Check the Mirage proxy:
 
 ```bash
 curl -k -i "https://localhost:8443/search?q=normal"
@@ -131,7 +131,7 @@ curl -k -i "https://localhost:8443/search?q=normal"
 The proxied clean response should include the demo backend header:
 
 ```text
-X-Backend-Server: aegis-demo-backend
+X-Backend-Server: mirage-demo-backend
 ```
 
 ## Generate demonstration traffic
@@ -163,6 +163,27 @@ curl -k --get "https://localhost:8443/search" \
   --data-urlencode "q=../../../../etc/passwd"
 ```
 
+Generate a SQL deception event. Use a normal browser-like user agent so the
+request is sent to the SQL deception handler instead of the scanner tarpit:
+
+```bash
+curl -k --get "https://localhost:8443/search" \
+  -A "Mozilla/5.0" \
+  --data-urlencode "q=UNION SELECT username, password FROM users --"
+```
+
+The response is a synthetic database result and includes:
+
+```text
+X-Mirage-Deception: sql_ast_projection
+X-Mirage-Target-Table: users
+```
+
+The JSON response identifies the virtual database, table, columns, operation,
+and number of generated records. The same fields are written to telemetry:
+`deception_type`, `target_database`, `target_schema`, `target_table`,
+`target_columns`, `operation`, and `response_metadata`.
+
 Generate scanner-style tarpit telemetry. The short timeout prevents the terminal from waiting for the full tarpit duration:
 
 ```bash
@@ -172,6 +193,17 @@ curl -k --max-time 8 \
 ```
 
 The proxy selects tarpit handling for scanner-style user agents such as `sqlmap`, `nikto`, `masscan`, `nmap`, and `python-requests`, and for probe paths such as `/.env`, `/.git`, `/wp-admin`, and `/actuator`.
+
+Run the focused SQL deception tests:
+
+```bash
+go test ./internal/deception ./internal/proxy
+```
+
+The SQL deception handler supports parseable `SELECT`, `INSERT`, `UPDATE`, and
+`DELETE` statements. Boolean and malformed SQLi payloads use a safe fallback
+that still records the inferred operation and virtual target without executing
+attacker SQL.
 
 ## Run locally without Docker
 
@@ -206,8 +238,8 @@ To run the dashboard locally:
 
 ```bash
 cd web/dashboard
-export NEXT_PUBLIC_AEGIS_WS_URL=ws://localhost:8090/ws
-export NEXT_PUBLIC_AEGIS_HEALTH_URL=http://localhost:8090/healthz
+export NEXT_PUBLIC_MIRAGE_WS_URL=ws://localhost:8090/ws
+export NEXT_PUBLIC_MIRAGE_HEALTH_URL=http://localhost:8090/healthz
 npm run dev
 ```
 
@@ -257,7 +289,7 @@ make docker-up
 
 ### Docker cannot pull images from Docker Hub
 
-If the build fails with an error such as `certificate is valid for blocked.anexgate.com, not registry-1.docker.io`, Docker Desktop is using a proxy or network filter that is blocking Docker Hub. This is a network configuration issue, not an Aegis application error.
+If the build fails with an error such as `certificate is valid for blocked.anexgate.com, not registry-1.docker.io`, Docker Desktop is using a proxy or network filter that is blocking Docker Hub. This is a network configuration issue, not an Mirage application error.
 
 1. Open Docker Desktop settings and check **Resources > Proxies**.
 2. Disable the proxy or replace it with the correct proxy for your network.

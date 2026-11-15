@@ -129,7 +129,7 @@ func TestThrottlePreservesCapturedResponse(t *testing.T) {
 
 	captured := NewResponseCapture()
 	captured.Header().Set("Content-Type", "text/plain")
-	captured.Header().Set("X-Backend-Server", "aegis-demo-backend")
+	captured.Header().Set("X-Backend-Server", "mirage-demo-backend")
 	captured.WriteHeader(http.StatusAccepted)
 	_, _ = captured.Write([]byte("captured fake response"))
 

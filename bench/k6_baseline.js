@@ -30,12 +30,12 @@ export default function () {
     'direct status is 200': (r) => r.status === 200,
   });
 
-  // 2. Benchmark Aegis Proxy Passthrough
+  // 2. Benchmark Mirage Proxy Passthrough
   const proxyResp = http.get(`${proxyURL}/search?q=test_query`);
   proxyLatency.add(proxyResp.timings.duration);
   check(proxyResp, {
     'proxy status is 200': (r) => r.status === 200,
-    'proxy backend header present': (r) => r.headers['X-Backend-Server'] === 'aegis-demo-backend',
+    'proxy backend header present': (r) => r.headers['X-Backend-Server'] === 'mirage-demo-backend',
   });
 
   sleep(0.01);

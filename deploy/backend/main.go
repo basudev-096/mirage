@@ -26,7 +26,7 @@ func main() {
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Backend-Server", "aegis-demo-backend")
+		w.Header().Set("X-Backend-Server", "mirage-demo-backend")
 		json.NewEncoder(w).Encode(Response{
 			Status:    "success",
 			Message:   "Welcome to the production demo target backend server",
@@ -42,7 +42,7 @@ func main() {
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Backend-Server", "aegis-demo-backend")
+		w.Header().Set("X-Backend-Server", "mirage-demo-backend")
 		json.NewEncoder(w).Encode(Response{
 			Status:    "success",
 			Message:   fmt.Sprintf("Found 3 results for query: %s", query),

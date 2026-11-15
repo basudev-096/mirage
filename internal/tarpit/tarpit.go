@@ -1,9 +1,8 @@
 // Package tarpit implements the adaptive RTT-aware response throttler.
 //
-// When the proxy detects an attack and the deception sandbox (Phase 3) has
-// generated a fake response, the tarpit takes ownership of writing that response
-// to the wire. Instead of a single Write call, it emits the body in small chunks
-// separated by delays derived from the attacker's own TCP round-trip time.
+// When the proxy detects scanner-like traffic, the tarpit emits a synthetic
+// response in small chunks separated by delays derived from the attacker's own
+// TCP round-trip time.
 //
 // A client probing with sqlmap will block for over two minutes waiting for data
 // that dribbles out at ~32 bytes per 600–800 ms — all while receiving a response
@@ -268,7 +267,7 @@ func (t *AdaptiveTarpit) Duration() time.Duration { return t.cfg.Duration }
 func (t *AdaptiveTarpit) Handle(w http.ResponseWriter, r *http.Request) error {
 	cap := NewResponseCapture()
 	cap.Header().Set("Content-Type", "application/json")
-	cap.Header().Set("X-Backend-Server", "aegis-demo-backend")
+	cap.Header().Set("X-Backend-Server", "mirage-demo-backend")
 	cap.WriteHeader(http.StatusOK)
 	_, _ = cap.Write([]byte(`{"status":"processing","data":[]`))
 	for i := 0; i < 100; i++ {

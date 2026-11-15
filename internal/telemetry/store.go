@@ -43,7 +43,8 @@ func (s *PostgresStore) Latest(ctx context.Context, limit int) ([]Event, error) 
 	rows, err := s.pool.Query(ctx, `SELECT request_id, session_id, session_requests, timestamp, source_ip, principal, auth_state,
 	method, path, request_summary, request_preview, body_preview, content_type, user_agent,
 	ja3, ja4, verdict, category, payload_class, rule_ids, score, inspection_time_us, action,
-	phase, response_type, response_preview, response_status, duration_ms, tarpit_duration_ms, bytes_served
+	phase, response_type, deception_type, target_database, target_schema, target_table,
+	target_columns, operation, response_metadata, response_status, duration_ms, tarpit_duration_ms, bytes_served
 	FROM telemetry_events ORDER BY timestamp DESC, id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -53,16 +54,22 @@ func (s *PostgresStore) Latest(ctx context.Context, limit int) ([]Event, error) 
 	for rows.Next() {
 		var event Event
 		var ruleIDs []byte
+		var targetColumns []byte
 		if err := rows.Scan(&event.RequestID, &event.SessionID, &event.SessionRequests, &event.Timestamp, &event.SourceIP,
 			&event.Principal, &event.Authorization, &event.Method, &event.Path, &event.RequestSummary,
 			&event.RequestPreview, &event.BodyPreview, &event.ContentType, &event.UserAgent,
 			&event.JA3, &event.JA4, &event.Verdict, &event.Category, &event.PayloadClass,
 			&ruleIDs, &event.Score, &event.InspectionTime, &event.Action, &event.Phase, &event.ResponseType,
-			&event.ResponsePreview, &event.ResponseStatus, &event.DurationMS, &event.TarpitDuration, &event.BytesServed); err != nil {
+			&event.DeceptionType, &event.TargetDatabase, &event.TargetSchema, &event.TargetTable,
+			&targetColumns, &event.Operation, &event.ResponseMetadata, &event.ResponseStatus,
+			&event.DurationMS, &event.TarpitDuration, &event.BytesServed); err != nil {
 			return nil, err
 		}
 		if len(ruleIDs) > 0 {
 			_ = json.Unmarshal(ruleIDs, &event.RuleIDs)
+		}
+		if len(targetColumns) > 0 {
+			_ = json.Unmarshal(targetColumns, &event.TargetColumns)
 		}
 		events = append(events, event)
 	}
@@ -95,7 +102,7 @@ func (s *PostgresStore) Sessions(ctx context.Context, limit int) ([]SessionSumma
 	COUNT(*) FILTER (WHERE phase = 'completed'),
 	COUNT(*) FILTER (WHERE phase = 'completed' AND verdict <> 'Clean'),
 	BOOL_OR(auth_state = 'unauthorized'),
-	COUNT(*) FILTER (WHERE phase = 'completed' AND action = 'honeypot'),
+	COUNT(*) FILTER (WHERE phase = 'completed' AND action = 'tarpit'),
 	COUNT(*) FILTER (WHERE phase = 'completed' AND action = 'tarpit'),
 	COALESCE(SUM(bytes_served) FILTER (WHERE phase = 'completed'), 0),
 	COALESCE(array_agg(DISTINCT category) FILTER (WHERE category <> ''), ARRAY[]::text[])
@@ -166,7 +173,13 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
     action TEXT NOT NULL,
 	phase TEXT NOT NULL DEFAULT '',
 	response_type TEXT NOT NULL DEFAULT '',
-	response_preview TEXT NOT NULL DEFAULT '',
+    deception_type TEXT NOT NULL DEFAULT '',
+    target_database TEXT NOT NULL DEFAULT '',
+    target_schema TEXT NOT NULL DEFAULT '',
+    target_table TEXT NOT NULL DEFAULT '',
+    target_columns JSONB NOT NULL DEFAULT '[]'::jsonb,
+    operation TEXT NOT NULL DEFAULT '',
+    response_metadata TEXT NOT NULL DEFAULT '',
 	response_status INTEGER NOT NULL DEFAULT 0,
 	duration_ms BIGINT NOT NULL DEFAULT 0,
     tarpit_duration_ms BIGINT NOT NULL DEFAULT 0,
@@ -184,7 +197,13 @@ ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS request_preview TEXT NOT N
 ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS body_preview TEXT NOT NULL DEFAULT '';
 ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS response_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS response_preview TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS deception_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS target_database TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS target_schema TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS target_table TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS target_columns JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS operation TEXT NOT NULL DEFAULT '';
+ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS response_metadata TEXT NOT NULL DEFAULT '';
 ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS response_status INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE telemetry_events ADD COLUMN IF NOT EXISTS duration_ms BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS telemetry_events_timestamp_idx ON telemetry_events (timestamp DESC);
@@ -209,15 +228,18 @@ INSERT INTO telemetry_events
 	 (request_id, session_id, session_requests, timestamp, source_ip, principal, auth_state,
 	  method, path, request_summary, request_preview, body_preview, content_type, user_agent, ja3, ja4,
 	  verdict, category, payload_class, rule_ids, score, inspection_time_us, action, phase, response_type,
-	  response_preview, response_status, duration_ms, tarpit_duration_ms, bytes_served)
+	  deception_type, target_database, target_schema, target_table, target_columns, operation,
+	  response_metadata, response_status, duration_ms, tarpit_duration_ms, bytes_served)
 	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,
-	 $21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
+	 $21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35,$36)`,
 			event.RequestID, event.SessionID, event.SessionRequests, normalizeTimestamp(event.Timestamp), event.SourceIP,
 			event.Principal, event.Authorization, event.Method, event.Path, event.RequestSummary,
 			event.RequestPreview, event.BodyPreview, event.ContentType, event.UserAgent, event.JA3, event.JA4,
 			event.Verdict, event.Category, event.PayloadClass, marshalRuleIDs(event.RuleIDs), event.Score,
-			event.InspectionTime, event.Action, event.Phase, event.ResponseType, event.ResponsePreview,
-			event.ResponseStatus, event.DurationMS, event.TarpitDuration, event.BytesServed)
+			event.InspectionTime, event.Action, event.Phase, event.ResponseType, event.DeceptionType,
+			event.TargetDatabase, event.TargetSchema, event.TargetTable, marshalStrings(event.TargetColumns),
+			event.Operation, event.ResponseMetadata, event.ResponseStatus, event.DurationMS,
+			event.TarpitDuration, event.BytesServed)
 		if err != nil {
 			return err
 		}
@@ -234,6 +256,14 @@ func normalizeTimestamp(timestamp time.Time) time.Time {
 
 func marshalRuleIDs(ruleIDs []string) string {
 	encoded, err := json.Marshal(ruleIDs)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func marshalStrings(values []string) string {
+	encoded, err := json.Marshal(values)
 	if err != nil {
 		return "[]"
 	}

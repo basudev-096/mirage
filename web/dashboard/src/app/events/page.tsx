@@ -40,13 +40,19 @@ interface TelemetryEvent {
   action: string;
   phase: string;
   response_type?: string;
-  response_preview?: string;
+  deception_type?: string;
+  target_database?: string;
+  target_schema?: string;
+  target_table?: string;
+  target_columns?: string[];
+  operation?: string;
+  response_metadata?: string;
   tarpit_duration_ms?: number;
   bytes_served?: number;
 }
 
-type EventFilter = "all" | "malicious" | "clean" | "honeypot" | "tarpit";
-const SOCKET_URL = process.env.NEXT_PUBLIC_AEGIS_WS_URL;
+type EventFilter = "all" | "malicious" | "clean" | "tarpit";
+const SOCKET_URL = process.env.NEXT_PUBLIC_MIRAGE_WS_URL;
 
 function time(value: string) {
   const date = new Date(value);
@@ -70,7 +76,7 @@ function Sidebar({ mobileOpen, close }: { mobileOpen: boolean; close: () => void
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-[#26302d] bg-[#090d13] transition-transform lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="flex h-16 items-center gap-3 border-b border-[#26302d] bg-[#111720] px-6">
         <div className="flex h-8 w-8 items-center justify-center rounded bg-[#4edea3] text-[#062519]"><ShieldCheck className="h-5 w-5" /></div>
-        <div><div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Aegis</div><div className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#86948a]">Active Defense</div></div>
+        <div><div className="font-mono text-sm font-semibold uppercase tracking-[0.18em] text-[#4edea3]">Mirage</div><div className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#86948a]">Active Defense</div></div>
       </div>
       <div className="px-5 pb-2 pt-7 font-mono text-[10px] uppercase tracking-[0.18em] text-[#66736d]">Operations</div>
       <nav className="flex flex-col gap-1 px-3">
@@ -105,7 +111,7 @@ export default function EventsPage() {
       socket.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as TelemetryEvent;
-          if (!event.timestamp || !event.source_ip || !event.path || event.phase.toLowerCase() === "started") return;
+          if (!event.timestamp || !event.source_ip || !event.path || event.phase.toLowerCase() !== "completed") return;
           setEvents((current) => [event, ...current].slice(0, 100));
         } catch {
           // Ignore malformed telemetry without interrupting the stream.
@@ -132,8 +138,8 @@ export default function EventsPage() {
     return events.filter((event) => {
       const malicious = event.verdict.toLowerCase() === "malicious";
       const action = event.action.toLowerCase();
-      const matchesFilter = filter === "all" || (filter === "malicious" && malicious) || (filter === "clean" && !malicious) || (filter === "honeypot" && action === "honeypot") || (filter === "tarpit" && action === "tarpit");
-      const haystack = [event.source_ip, event.path, event.category, event.action, event.verdict, ...(event.rule_ids ?? [])].filter(Boolean).join(" ").toLowerCase();
+      const matchesFilter = filter === "all" || (filter === "malicious" && malicious) || (filter === "clean" && !malicious) || (filter === "tarpit" && action === "tarpit");
+      const haystack = [event.source_ip, event.path, event.category, event.action, event.verdict, event.target_table, event.operation, ...(event.rule_ids ?? [])].filter(Boolean).join(" ").toLowerCase();
       return matchesFilter && (!needle || haystack.includes(needle));
     });
   }, [events, filter, query]);
@@ -150,19 +156,19 @@ export default function EventsPage() {
       <Sidebar mobileOpen={mobileOpen} close={() => setMobileOpen(false)} />
       <div className="lg:pl-72">
         <header className="fixed left-0 right-0 top-0 z-30 flex h-16 items-center justify-between border-b border-[#26302d] bg-[#0f131c]/95 px-5 backdrop-blur lg:left-72 lg:px-8">
-          <div className="flex items-center gap-3"><button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#aab7b0] hover:bg-[#202b2a] lg:hidden" aria-label="Open navigation"><Menu className="h-5 w-5" /></button><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">Aegis /</span><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#dfe2ef]">Live Events</span></div>
+          <div className="flex items-center gap-3"><button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#aab7b0] hover:bg-[#202b2a] lg:hidden" aria-label="Open navigation"><Menu className="h-5 w-5" /></button><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#86948a]">Mirage /</span><span className="font-mono text-xs uppercase tracking-[0.18em] text-[#dfe2ef]">Live Events</span></div>
           <div className={`flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider ${status === "live" ? "text-[#4edea3]" : "text-[#ffb86b]"}`}><CircleDot className="h-3 w-3" />{status === "live" ? "Stream live" : status}</div>
         </header>
 
         <main className="min-h-screen px-5 pb-14 pt-24 lg:px-10">
           <section className="mb-6 flex flex-col justify-between gap-5 rounded-xl border border-[#26302d] bg-[#181b25] p-6 lg:flex-row lg:items-center">
-            <div className="flex gap-4"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded bg-[#202b2a] text-[#4edea3]"><Radio className="h-5 w-5" /></div><div><div className="mb-1 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4edea3]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#4edea3]" /> Live telemetry</div><h1 className="text-2xl font-semibold tracking-tight">Event Stream</h1><p className="mt-1 font-mono text-xs text-[#86948a]">Real-time events received from the Aegis ingest WebSocket.</p></div></div>
+            <div className="flex gap-4"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded bg-[#202b2a] text-[#4edea3]"><Radio className="h-5 w-5" /></div><div><div className="mb-1 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4edea3]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#4edea3]" /> Live telemetry</div><h1 className="text-2xl font-semibold tracking-tight">Event Stream</h1><p className="mt-1 font-mono text-xs text-[#86948a]">Real-time events received from the Mirage ingest WebSocket.</p></div></div>
             <div className="flex gap-2"><div className="rounded bg-[#202b2a] px-4 py-2 font-mono text-[10px] uppercase tracking-wider text-[#86948a]">Buffer <strong className="ml-2 text-[#dfe2ef]">{events.length} / 100</strong></div><button onClick={() => { if (!paused) setPausedEvents(visibleEvents); setPaused((value) => !value); }} className="flex items-center gap-2 rounded bg-[#4edea3] px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-[#062519]">{paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{paused ? "Resume" : "Pause"}</button><button onClick={() => { setEvents([]); setPausedEvents([]); }} className="flex items-center gap-2 rounded bg-[#202b2a] px-4 py-2 font-mono text-[10px] uppercase tracking-wider text-[#aab7b0] hover:text-[#ffb4ab]"><Eraser className="h-3.5 w-3.5" /> Clear</button></div>
           </section>
 
           <section className="mb-5 flex flex-col gap-3 rounded-lg border border-[#26302d] bg-[#181b25] p-4 xl:flex-row xl:items-center">
             <div className="relative flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#66736d]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search IP, path, category, action, or rule ID..." className="w-full rounded bg-[#0f131c] py-2.5 pl-10 pr-4 font-mono text-xs text-[#dfe2ef] outline-none placeholder:text-[#66736d] focus:ring-1 focus:ring-[#4edea3]" /></div>
-            <div className="flex flex-wrap items-center gap-1 rounded bg-[#0f131c] p-1">{(["all", "malicious", "clean", "honeypot", "tarpit"] as EventFilter[]).map((value) => <button key={value} onClick={() => setFilter(value)} className={`rounded px-3 py-2 font-mono text-[10px] uppercase tracking-wider ${filter === value ? "bg-[#4edea3] font-semibold text-[#062519]" : "text-[#86948a] hover:text-[#dfe2ef]"}`}>{value}</button>)}</div><Filter className="hidden h-4 w-4 text-[#66736d] xl:block" />
+            <div className="flex flex-wrap items-center gap-1 rounded bg-[#0f131c] p-1">{(["all", "malicious", "clean", "tarpit"] as EventFilter[]).map((value) => <button key={value} onClick={() => setFilter(value)} className={`rounded px-3 py-2 font-mono text-[10px] uppercase tracking-wider ${filter === value ? "bg-[#4edea3] font-semibold text-[#062519]" : "text-[#86948a] hover:text-[#dfe2ef]"}`}>{value}</button>)}</div><Filter className="hidden h-4 w-4 text-[#66736d] xl:block" />
           </section>
 
           <section className="overflow-hidden rounded-lg border border-[#26302d] bg-[#181b25]">
@@ -180,7 +186,7 @@ export default function EventsPage() {
         </main>
       </div>
 
-      {selected && <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setSelected(undefined)}><aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto border-l border-[#26302d] bg-[#111720] p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="mb-6 flex items-start justify-between border-b border-[#26302d] pb-5"><div><div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#4edea3]">Event detail</div><h2 className="font-mono text-lg text-[#dfe2ef]">{selected.method} {selected.path}</h2><p className="mt-1 font-mono text-xs text-[#86948a]">{selected.source_ip} · {time(selected.timestamp)}</p></div><button onClick={() => setSelected(undefined)} className="rounded p-2 text-[#86948a] hover:bg-[#202b2a] hover:text-[#dfe2ef]" aria-label="Close event details"><X className="h-5 w-5" /></button></div><div className="grid grid-cols-2 gap-3">{[["Verdict", selected.verdict], ["Category", selected.category ?? "—"], ["Action", selected.action], ["Phase", selected.phase], ["Score", String(selected.score ?? "—")], ["Latency", selected.inspection_time_us ? `${(selected.inspection_time_us / 1000).toFixed(1)}ms` : "—"], ["Tarpit", duration(selected.tarpit_duration_ms)], ["Bytes served", String(selected.bytes_served ?? "—")]].map(([label, value]) => <div key={label} className="rounded bg-[#181b25] p-3"><div className="font-mono text-[10px] uppercase text-[#66736d]">{label}</div><div className="mt-2 break-all font-mono text-xs text-[#dfe2ef]">{value}</div></div>)}</div><div className="mt-5 space-y-4">{[["Request summary", selected.request_summary], ["User agent", selected.user_agent], ["JA3", selected.ja3], ["JA4", selected.ja4], ["Rule IDs", selected.rule_ids?.join(", ")], ["Response preview", selected.response_preview]].map(([label, value]) => value ? <div key={label}><div className="mb-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-[#86948a]"><span>{label}</span><button onClick={() => copy(String(label), String(value))} className="flex items-center gap-1 text-[#4edea3]">{copied === label ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}{copied === label ? "Copied" : "Copy"}</button></div><pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded bg-[#0f131c] p-3 font-mono text-xs text-[#aab7b0]">{value}</pre></div> : null)}</div><button onClick={() => copy("JSON", JSON.stringify(selected, null, 2))} className="mt-6 flex items-center gap-2 rounded bg-[#4edea3] px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-[#062519]">{copied === "JSON" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} Copy event JSON</button></aside></div>}
+      {selected && <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setSelected(undefined)}><aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto border-l border-[#26302d] bg-[#111720] p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="mb-6 flex items-start justify-between border-b border-[#26302d] pb-5"><div><div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#4edea3]">Event detail</div><h2 className="font-mono text-lg text-[#dfe2ef]">{selected.method} {selected.path}</h2><p className="mt-1 font-mono text-xs text-[#86948a]">{selected.source_ip} · {time(selected.timestamp)}</p></div><button onClick={() => setSelected(undefined)} className="rounded p-2 text-[#86948a] hover:bg-[#202b2a] hover:text-[#dfe2ef]" aria-label="Close event details"><X className="h-5 w-5" /></button></div><div className="grid grid-cols-2 gap-3">{[["Verdict", selected.verdict], ["Category", selected.category ?? "—"], ["Action", selected.action], ["Phase", selected.phase], ["Score", String(selected.score ?? "—")], ["Latency", selected.inspection_time_us ? `${(selected.inspection_time_us / 1000).toFixed(1)}ms` : "—"], ["Tarpit", duration(selected.tarpit_duration_ms)], ["Bytes served", String(selected.bytes_served ?? "—")]].map(([label, value]) => <div key={label} className="rounded bg-[#181b25] p-3"><div className="font-mono text-[10px] uppercase text-[#66736d]">{label}</div><div className="mt-2 break-all font-mono text-xs text-[#dfe2ef]">{value}</div></div>)}</div>{selected.target_table && <div className="mt-5 rounded border border-[#4edea3]/40 bg-[#202b2a] p-4"><div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-[#4edea3]">Honeypot target analysis</div><div className="grid grid-cols-2 gap-3 font-mono text-xs"><span className="text-[#86948a]">Database: <strong className="text-[#dfe2ef]">{selected.target_database ?? "—"}</strong></span><span className="text-[#86948a]">Schema: <strong className="text-[#dfe2ef]">{selected.target_schema ?? "—"}</strong></span><span className="text-[#86948a]">Table: <strong className="text-[#dfe2ef]">{selected.target_table}</strong></span><span className="text-[#86948a]">Operation: <strong className="text-[#dfe2ef]">{selected.operation ?? "—"}</strong></span></div><div className="mt-3 font-mono text-xs text-[#86948a]">Columns: <strong className="text-[#dfe2ef]">{selected.target_columns?.join(", ") || "—"}</strong></div></div>}<div className="mt-5 space-y-4">{[["Request summary", selected.request_summary], ["Deception type", selected.deception_type], ["Response metadata", selected.response_metadata], ["User agent", selected.user_agent], ["JA3", selected.ja3], ["JA4", selected.ja4], ["Rule IDs", selected.rule_ids?.join(", ")]].map(([label, value]) => value ? <div key={label}><div className="mb-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-[#86948a]"><span>{label}</span><button onClick={() => copy(String(label), String(value))} className="flex items-center gap-1 text-[#4edea3]">{copied === label ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}{copied === label ? "Copied" : "Copy"}</button></div><pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded bg-[#0f131c] p-3 font-mono text-xs text-[#aab7b0]">{value}</pre></div> : null)}</div><button onClick={() => copy("JSON", JSON.stringify(selected, null, 2))} className="mt-6 flex items-center gap-2 rounded bg-[#4edea3] px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-[#062519]">{copied === "JSON" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} Copy event JSON</button></aside></div>}
     </div>
   );
 }

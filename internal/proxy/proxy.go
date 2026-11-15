@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,12 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aegis-proxy/aegis/internal/auth"
-	"github.com/aegis-proxy/aegis/internal/deceive"
-	"github.com/aegis-proxy/aegis/internal/detect"
-	"github.com/aegis-proxy/aegis/internal/fingerprint"
-	"github.com/aegis-proxy/aegis/internal/tarpit"
-	"github.com/aegis-proxy/aegis/internal/telemetry"
+	"github.com/mirage-proxy/mirage/internal/auth"
+	"github.com/mirage-proxy/mirage/internal/deception"
+	"github.com/mirage-proxy/mirage/internal/detect"
+	"github.com/mirage-proxy/mirage/internal/fingerprint"
+	"github.com/mirage-proxy/mirage/internal/tarpit"
+	"github.com/mirage-proxy/mirage/internal/telemetry"
 )
 
 // Config defines the operational parameters for the edge reverse proxy.
@@ -39,12 +38,9 @@ type Config struct {
 	Detector      detect.Detector
 	Authenticator auth.Authenticator
 	Tarpit        tarpit.Tarpit
-	// Deceiver, when non-nil, handles all flagged requests by synthesising a
-	// fake response instead of forwarding to the real backend. This is the
-	// normal production mode. EvalBlock takes precedence when both are set.
-	Deceiver  deceive.Deceiver
-	EvalBlock bool
-	Telemetry *telemetry.Publisher
+	Deception     *deception.Engine
+	EvalBlock     bool
+	Telemetry     *telemetry.Publisher
 }
 
 // DefaultConfig returns sane default parameters for high-throughput production proxying.
@@ -67,8 +63,8 @@ type Proxy struct {
 	reverseProxy  *httputil.ReverseProxy
 	transport     *http.Transport
 	detector      detect.Detector
-	deceiver      deceive.Deceiver
 	tarpit        tarpit.Tarpit
+	deception     *deception.Engine
 	authenticator auth.Authenticator
 	sessions      *sessionTracker
 }
@@ -234,8 +230,8 @@ func NewProxy(cfg Config) (*Proxy, error) {
 		transport:     transport,
 		detector:      cfg.Detector,
 		authenticator: cfg.Authenticator,
-		deceiver:      cfg.Deceiver,
 		tarpit:        cfg.Tarpit,
+		deception:     cfg.Deception,
 		sessions:      newSessionTracker(),
 	}
 
@@ -290,25 +286,21 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metrics := &responseMetricsWriter{ResponseWriter: w}
 	w = fingerprint.NewWriter(metrics)
 	if p.detector == nil {
-		r.Header.Del("X-Aegis-Principal")
+		r.Header.Del("X-Mirage-Principal")
 		if p.authenticator != nil {
 			principal := p.authenticator.Authenticate(r)
 			if !principal.Authorized {
-				if p.deceiver != nil {
-					_ = p.deceiver.Handle(w, r, deceive.CategoryUnauthorized)
-				} else {
-					http.Error(w, "request diverted", http.StatusUnauthorized)
-				}
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			r.Header.Del("Authorization")
-			r.Header.Del("X-Aegis-Principal")
-			r.Header.Set("X-Aegis-Principal", principal.Name)
+			r.Header.Del("X-Mirage-Principal")
+			r.Header.Set("X-Mirage-Principal", principal.Name)
 		}
 		p.reverseProxy.ServeHTTP(w, r)
 		return
 	}
-	r.Header.Del("X-Aegis-Principal")
+	r.Header.Del("X-Mirage-Principal")
 
 	var tb *trackedBody
 	if r.Body != nil && r.Body != http.NoBody {
@@ -351,12 +343,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// to the backend or copied into telemetry.
 		r.Header.Del("Authorization")
 		if principal.Authorized {
-			r.Header.Set("X-Aegis-Principal", principal.Name)
+			r.Header.Set("X-Mirage-Principal", principal.Name)
 		}
 	}
 	if !principal.Authorized {
 		if verdict.Category == "" || verdict.Category == "Clean" {
-			verdict.Category = string(deceive.CategoryUnauthorized)
+			verdict.Category = "Unauthorized"
 		}
 		verdict.Malicious = true
 		verdict.Score += 5
@@ -370,8 +362,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			verdictHeader = "Unauthorized"
 		}
 	}
-	r.Header.Set("X-Aegis-Verdict", verdictHeader)
-	diverted := p.cfg.EvalBlock || (verdict.Malicious && (p.deceiver != nil || p.tarpit != nil)) || !principal.Authorized
+	r.Header.Set("X-Mirage-Verdict", verdictHeader)
+	diverted := p.cfg.EvalBlock || (verdict.Malicious && p.tarpit != nil) || !principal.Authorized
 	now := time.Now().UTC()
 	source := sourceIP(r.RemoteAddr)
 	clientDigest := sha256.Sum256([]byte(source + "\x00" + r.UserAgent() + "\x00" + principal.Name + "\x00" + authorization))
@@ -379,18 +371,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if sessionDiverted {
 		diverted = true
 		if verdict.Category == "" || verdict.Category == "Clean" {
-			verdict.Category = string(deceive.CategoryUnknown)
+			verdict.Category = "Unknown"
 		}
 		verdict.Malicious = true
 		verdictHeader = "Malicious"
-		r.Header.Set("X-Aegis-Session-Diverted", "true")
+		r.Header.Set("X-Mirage-Session-Diverted", "true")
 	}
 	useTarpit := false
-	r.Header.Set("X-Aegis-Session-ID", sessionID)
+	deceptionResult := deception.Result{}
+	r.Header.Set("X-Mirage-Session-ID", sessionID)
 	requestID := newTraceID("req")
 	bodyPreview := requestBodyPreview(r, recordedBody)
-	r.Header.Set("X-Aegis-Verdict", verdictHeader)
+	r.Header.Set("X-Mirage-Verdict", verdictHeader)
 	useTarpit = diverted && p.tarpit != nil && shouldTarpit(r)
+	if verdict.Malicious && verdict.Category == "SQLi" && p.deception != nil && !useTarpit && !p.cfg.EvalBlock {
+		deceptionResult = p.deception.AnalyzeRequest(r, recordedBody)
+		if deceptionResult.Recognized {
+			diverted = true
+		}
+	}
 	event := telemetry.Event{
 		RequestID:       requestID,
 		SessionID:       sessionID,
@@ -414,6 +413,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Action:          "passthrough",
 		ResponseType:    "real_backend_response",
 	}
+	if deceptionResult.Recognized {
+		event.Action = "honeypot"
+		event.ResponseType = deceptionResult.ResponseType
+		event.DeceptionType = deceptionResult.PayloadClass
+		event.TargetDatabase = deceptionResult.Target.Database
+		event.TargetSchema = deceptionResult.Target.Schema
+		event.TargetTable = deceptionResult.Target.Table
+		event.TargetColumns = deceptionResult.Target.Columns
+		event.Operation = deceptionResult.Target.Operation
+		event.ResponseMetadata = deceptionResult.ResponseMetadata
+	}
 	if bodyPreview != "" {
 		event.RequestPreview += "\n" + bodyPreview
 	}
@@ -425,8 +435,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if p.cfg.Telemetry != nil {
 		if diverted {
-			event.Action = "honeypot"
-			event.ResponseType = "fake_honeypot_response"
 			if useTarpit {
 				event.Action = "tarpit"
 				event.ResponseType = "adaptive_fake_response"
@@ -457,68 +465,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// EvalBlock mode is reserved for detector evaluation runs.
 		if p.cfg.EvalBlock {
-			w.Header().Set("X-Aegis-Verdict", verdictHeader)
+			w.Header().Set("X-Mirage-Verdict", verdictHeader)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"forbidden","message":"Request blocked by security policy"}`))
 			return
 		}
+		if deceptionResult.Recognized {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Mirage-Deception", deceptionResult.PayloadClass)
+			w.Header().Set("X-Mirage-Target-Table", deceptionResult.Target.Table)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(deceptionResult.Body)
+			return
+		}
 
-		// Deception mode: synthesise a fake response — the TLS session is
-		// never reset and the backend is never contacted.
 		if useTarpit {
-			if p.deceiver != nil {
-				if throttler, ok := p.tarpit.(interface {
-					Throttle(http.ResponseWriter, *http.Request, *tarpit.ResponseCapture) error
-				}); ok {
-					captured := tarpit.NewResponseCapture()
-					if err := p.deceiver.Handle(captured, r, deceive.Category(verdict.Category)); err != nil {
-						log.Printf("[Deceiver Error] %v", err)
-						return
-					}
-					event.ResponseType = "adaptive_fake_response"
-					event.ResponsePreview = previewResponse(captured.Body())
-					if err := throttler.Throttle(w, r, captured); err != nil {
-						if errors.Is(err, tarpit.ErrCapacity) && p.deceiver != nil {
-							_ = p.deceiver.Handle(w, r, deceive.Category(verdict.Category))
-							return
-						}
-						log.Printf("[Tarpit Error] %v", err)
-					}
-					return
-				}
-			}
 			if err := p.tarpit.Handle(w, r); err != nil {
 				log.Printf("[Tarpit Error] %v", err)
 			}
 			return
 		}
-		if p.deceiver != nil {
-			category := deceive.Category(verdict.Category)
-			captured := tarpit.NewResponseCapture()
-			if err := p.deceiver.Handle(captured, r, category); err != nil {
-				log.Printf("[Deceiver Error] %v", err)
-				return
-			}
-			event.ResponseType = "fake_honeypot_response"
-			event.ResponsePreview = previewResponse(captured.Body())
-			copyCapturedResponse(w, captured)
-			return
+		if !principal.Authorized {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		}
-		// Fail closed if deception is unavailable. A flagged or unauthorized
-		// request must never fall through to the real backend.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"success","message":"No results found","data":[]}`))
 		return
 	}
 
 	p.reverseProxy.ServeHTTP(w, r)
 }
 
-// shouldTarpit selects slow deception for scanner-like traffic. Exploit
-// requests from ordinary clients still receive an immediate honeypot response,
-// which lets the same running proxy demonstrate both actions automatically.
+// shouldTarpit selects slow handling for scanner-like traffic.
 func shouldTarpit(r *http.Request) bool {
 	ua := strings.ToLower(r.UserAgent())
 	for _, marker := range []string{"sqlmap", "nikto", "masscan", "nmap", "python-requests", "zgrab", "gobuster", "dirbuster"} {
@@ -533,26 +510,6 @@ func shouldTarpit(r *http.Request) bool {
 		}
 	}
 	return false
-}
-
-func previewResponse(body []byte) string {
-	const maxPreview = 512
-	return string(body[:minInt(len(body), maxPreview)])
-}
-
-func copyCapturedResponse(w http.ResponseWriter, captured *tarpit.ResponseCapture) {
-	for key, values := range captured.Header() {
-		w.Header()[key] = append([]string(nil), values...)
-	}
-	w.WriteHeader(captured.Status())
-	_, _ = w.Write(captured.Body())
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
 }
 
 // Server returns an *http.Server configured with sane timeouts and optional TLS settings.

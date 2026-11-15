@@ -19,13 +19,13 @@ func (w *recordingStreamWriter) XAdd(_ context.Context, args *redis.XAddArgs) *r
 
 func TestRedisSinkSerializesEvent(t *testing.T) {
 	writer := &recordingStreamWriter{}
-	sink := &RedisSink{client: writer, stream: "aegis:events", maxLen: 1000}
+	sink := &RedisSink{client: writer, stream: "mirage:events", maxLen: 1000}
 	event := Event{SourceIP: "192.0.2.10", Verdict: "Malicious", Category: "SQLi"}
 
 	if err := sink.Write(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
-	if writer.args.Stream != "aegis:events" || writer.args.MaxLen != 1000 || !writer.args.Approx {
+	if writer.args.Stream != "mirage:events" || writer.args.MaxLen != 1000 || !writer.args.Approx {
 		t.Fatalf("unexpected XADD args: %+v", writer.args)
 	}
 	values, ok := writer.args.Values.(map[string]any)

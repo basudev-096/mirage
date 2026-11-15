@@ -1,4 +1,4 @@
-name: Aegis CI
+name: Mirage CI
 
 on:
   push:
